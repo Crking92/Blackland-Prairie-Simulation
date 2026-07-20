@@ -1,0 +1,844 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Blackland Prairie Simulation</title>
+  
+  <!-- Load Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  
+  <!-- Load React -->
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  
+  <!-- Load Babel to compile JSX in the browser -->
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+</head>
+<body class="bg-slate-100">
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState, useEffect, useRef, useCallback } = React;
+
+    // ============================================================
+    // BLACKLAND PRAIRIE–BALCONES TRANSITION SIMULATION
+    // ============================================================
+
+    const GRID_SIZE = 120;
+    const CELL_SIZE = 6;
+    const CANVAS_SIZE = GRID_SIZE * CELL_SIZE;
+
+    const BISON_COUNT = 90;
+    const HERD_COUNT = 4;
+
+    const ECOLOGICAL_STEP_MS = 70;
+
+    const TYPE_PRAIRIE = 0;
+    const TYPE_WATER = 1;
+    const TYPE_ROCK = 2;
+    const TYPE_WETLAND = 3;
+    const TYPE_RIPARIAN = 4;
+
+    const VEG_BARE = 0;
+    const VEG_SPARSE_GRASS = 1;
+    const VEG_MATURE_GRASS = 2;
+    const VEG_SHRUB = 3;
+    const VEG_SAPLING = 4;
+    const VEG_TREE = 5;
+
+    const GRASS_REGROWTH_CHANCE = 0.03;
+    const GRASS_MATURATION_CHANCE = 0.012;
+    const SHRUB_LOCAL_SPREAD_CHANCE = 0.006;
+    const SHRUB_BIRD_DROP_CHANCE = 0.0003;
+    const TREE_SEED_CHANCE = 0.004;
+    const SAPLING_MATURATION_TIME = 200;
+    const LIGHTNING_EVENT_CHANCE = 0.001;
+    const INDIGENOUS_BURN_CHANCE = 0.003;
+    const FIRE_DURATION = 4;
+
+    const HERD_COHESION = 0.012;
+    const HERD_ALIGNMENT = 0.035;
+    const BISON_SEPARATION = 0.045;
+    const HERD_WANDER_STRENGTH = 0.018;
+
+    const MAX_BISON_SPEED = 0.42;
+    const MIN_BISON_SPEED = 0.08;
+
+    const FIRE_IGNITION_CHANCE = {
+      [VEG_BARE]: 0,
+      [VEG_SPARSE_GRASS]: 0.06,
+      [VEG_MATURE_GRASS]: 0.65,
+      [VEG_SHRUB]: 0.3,
+      [VEG_SAPLING]: 0.2,
+      [VEG_TREE]: 0.06,
+    };
+
+    const CARDINAL_NEIGHBORS = [
+      [1, 0], [-1, 0], [0, 1], [0, -1],
+    ];
+
+    const ALL_NEIGHBORS = [
+      [-1, -1], [0, -1], [1, -1], [-1, 0], [1, 0], [-1, 1], [0, 1], [1, 1],
+    ];
+
+    const clamp = (value, minimum, maximum) => Math.max(minimum, Math.min(maximum, value));
+    const isInsideGrid = (x, y) => x >= 0 && x < GRID_SIZE && y >= 0 && y < GRID_SIZE;
+
+    const createCell = (x, y, type, vegetation) => ({
+      x, y, type, veg: vegetation, saplingAge: 0, onFire: 0, fireIntensity: 0,
+    });
+
+    const getTerrainFireMultiplier = (terrain) => {
+      if (terrain === TYPE_WATER) return 0;
+      if (terrain === TYPE_WETLAND) return 0.05;
+      if (terrain === TYPE_RIPARIAN) return 0.02;
+      if (terrain === TYPE_ROCK) return 0.1;
+      return 1;
+    };
+
+    const getTreeTerrainMultiplier = (terrain) => {
+      if (terrain === TYPE_RIPARIAN) return 1.7;
+      if (terrain === TYPE_ROCK) return 1.15;
+      if (terrain === TYPE_WETLAND) return 0.12;
+      if (terrain === TYPE_PRAIRIE) return 0.5;
+      return 0;
+    };
+
+    const getGrassCompetitionMultiplier = (vegetation) => {
+      if (vegetation === VEG_BARE) return 1;
+      if (vegetation === VEG_SPARSE_GRASS) return 0.42;
+      if (vegetation === VEG_MATURE_GRASS) return 0.08;
+      if (vegetation === VEG_SHRUB) return 0.22;
+      return 0;
+    };
+
+    function App() {
+      const canvasRef = useRef(null);
+      const gridRef = useRef([]);
+      const bisonRef = useRef([]);
+      const herdsRef = useRef([]);
+      const animationFrameRef = useRef(null);
+      const previousFrameTimeRef = useRef(0);
+      const accumulatedTimeRef = useRef(0);
+      const tickRef = useRef(0);
+
+      const [isRunning, setIsRunning] = useState(true);
+      const [ticks, setTicks] = useState(0);
+      const [speed, setSpeed] = useState(1);
+
+      const [bisonActive, setBisonActive] = useState(true);
+      const [lightningActive, setLightningActive] = useState(true);
+      const [indigenousBurnsActive, setIndigenousBurnsActive] = useState(true);
+
+      const runningRef = useRef(true);
+      const speedRef = useRef(1);
+      const bisonActiveRef = useRef(true);
+      const lightningActiveRef = useRef(true);
+      const indigenousBurnsActiveRef = useRef(true);
+
+      useEffect(() => { runningRef.current = isRunning; }, [isRunning]);
+      useEffect(() => { speedRef.current = speed; }, [speed]);
+      useEffect(() => { bisonActiveRef.current = bisonActive; }, [bisonActive]);
+      useEffect(() => { lightningActiveRef.current = lightningActive; }, [lightningActive]);
+      useEffect(() => { indigenousBurnsActiveRef.current = indigenousBurnsActive; }, [indigenousBurnsActive]);
+
+      const drawCanvas = useCallback(() => {
+        const canvas = canvasRef.current;
+        const grid = gridRef.current;
+        if (!canvas || !grid.length) return;
+        const context = canvas.getContext("2d");
+        if (!context) return;
+
+        context.clearRect(0, 0, canvas.width, canvas.height);
+
+        for (let y = 0; y < GRID_SIZE; y += 1) {
+          for (let x = 0; x < GRID_SIZE; x += 1) {
+            const cell = grid[y][x];
+            let color = "#d2b48c";
+
+            if (cell.type === TYPE_WATER) {
+              color = (x + y) % 5 === 0 ? "#0277bd" : "#0288d1";
+            } else if (cell.type === TYPE_ROCK) {
+              color = "#90a4ae";
+            } else if (cell.type === TYPE_WETLAND) {
+              color = "#9aaa83";
+            } else if (cell.type === TYPE_RIPARIAN) {
+              color = "#5d4037";
+            }
+
+            if (cell.veg === VEG_SPARSE_GRASS) {
+              color = cell.type === TYPE_WETLAND ? "#aed581" : "#c5e1a5";
+            } else if (cell.veg === VEG_MATURE_GRASS) {
+              color = "#7cb342";
+            } else if (cell.veg === VEG_SHRUB) {
+              color = "#827717";
+            } else if (cell.veg === VEG_SAPLING) {
+              color = "#558b2f";
+            } else if (cell.veg === VEG_TREE) {
+              if (cell.type === TYPE_RIPARIAN) {
+                color = "#004d40";
+              } else if (cell.type === TYPE_ROCK) {
+                color = "#1b5e20";
+              } else {
+                color = "#2e7d32";
+              }
+            }
+
+            if (cell.onFire > 0) {
+              color = cell.onFire > 2 ? "#ff5722" : "#ffc107";
+            }
+
+            context.fillStyle = color;
+            context.fillRect(x * CELL_SIZE, y * CELL_SIZE, CELL_SIZE, CELL_SIZE);
+          }
+        }
+
+        if (bisonActiveRef.current) {
+          context.fillStyle = "#4e342e";
+          for (const bison of bisonRef.current) {
+            context.beginPath();
+            context.arc(bison.x * CELL_SIZE, bison.y * CELL_SIZE, CELL_SIZE / 1.45, 0, Math.PI * 2);
+            context.fill();
+          }
+        }
+      }, []);
+
+      const initializeSimulation = useCallback(() => {
+        const newGrid = [];
+        const newBison = [];
+        const newHerds = [];
+
+        const verticalRiverCenters = [];
+        const verticalRiverWidths = [];
+
+        for (let y = 0; y < GRID_SIZE; y += 1) {
+          const broadCurve = Math.sin(y / 15) * 3.25;
+          const smallerCurve = Math.sin(y / 5.5) * 1.1;
+          verticalRiverCenters.push(105 + broadCurve + smallerCurve);
+          verticalRiverWidths.push(2.6 + ((Math.sin(y / 11) + 1) / 2) * 1.15);
+        }
+
+        const tributaryCenters = [];
+        const tributaryWidths = [];
+        const mergeY = Math.floor(GRID_SIZE * 0.6);
+        const tributaryStartingX = 1;
+        const tributaryMergeX = verticalRiverCenters[mergeY];
+
+        for (let y = 0; y < GRID_SIZE; y += 1) {
+          if (y <= mergeY) {
+            const progress = y / mergeY;
+            const smoothProgress = progress * progress * (3 - 2 * progress);
+            const meanderFade = 1 - progress * progress;
+            const meander = Math.sin(y / 7) * 3.5 * meanderFade + Math.sin(y / 3.7) * 0.8 * meanderFade;
+            const center = tributaryStartingX + (tributaryMergeX - tributaryStartingX) * smoothProgress + meander;
+            tributaryCenters.push(center);
+            tributaryWidths.push(1.8 + progress * 0.9 + Math.sin(y / 9) * 0.2);
+          } else {
+            tributaryCenters.push(null);
+            tributaryWidths.push(0);
+          }
+        }
+
+        const rockPatches = [];
+        for (let i = 0; i < 38; i += 1) {
+          const verticalBias = Math.pow(Math.random(), 1.7);
+          rockPatches.push({
+            x: Math.floor(Math.random() * 43),
+            y: Math.floor(GRID_SIZE - 1 - verticalBias * 42),
+            radius: 3 + Math.random() * 6.5,
+          });
+        }
+        for (let i = 0; i < 6; i += 1) {
+          rockPatches.push({
+            x: Math.floor(Math.random() * GRID_SIZE),
+            y: Math.floor(Math.random() * GRID_SIZE),
+            radius: 1.7 + Math.random() * 2.8,
+          });
+        }
+
+        const gilgaiPatches = [];
+        for (let i = 0; i < 20; i += 1) {
+          gilgaiPatches.push({
+            x: 30 + Math.floor(Math.random() * 73),
+            y: Math.floor(Math.random() * GRID_SIZE),
+            radius: 1 + Math.random() * 1.7,
+          });
+        }
+
+        const prairieMotts = [];
+        for (let i = 0; i < 6; i += 1) {
+          prairieMotts.push({
+            x: 25 + Math.floor(Math.random() * 72),
+            y: 8 + Math.floor(Math.random() * 102),
+            radius: 1.7 + Math.random() * 2.2,
+          });
+        }
+
+        for (let y = 0; y < GRID_SIZE; y += 1) {
+          const row = [];
+          for (let x = 0; x < GRID_SIZE; x += 1) {
+            let terrain = TYPE_PRAIRIE;
+            let vegetation = VEG_MATURE_GRASS;
+            let water = false;
+            let riparian = false;
+
+            const mainRiverDistance = Math.abs(x - verticalRiverCenters[y]);
+            const mainChannelEdge = verticalRiverWidths[y];
+            const mainRiparianEdge = mainChannelEdge + 5;
+
+            if (mainRiverDistance <= mainChannelEdge) {
+              water = true;
+            } else if (mainRiverDistance <= mainRiparianEdge) {
+              riparian = true;
+            }
+
+            if (tributaryCenters[y] !== null) {
+              const tributaryDistance = Math.abs(x - tributaryCenters[y]);
+              const tributaryChannelEdge = tributaryWidths[y];
+              const tributaryRiparianEdge = tributaryChannelEdge + 4;
+              if (tributaryDistance <= tributaryChannelEdge) {
+                water = true;
+              } else if (tributaryDistance <= tributaryRiparianEdge) {
+                riparian = true;
+              }
+            }
+
+            if (water) {
+              terrain = TYPE_WATER;
+              vegetation = VEG_BARE;
+            } else if (riparian) {
+              terrain = TYPE_RIPARIAN;
+              const random = Math.random();
+              if (random < 0.76) {
+                vegetation = VEG_TREE;
+              } else if (random < 0.92) {
+                vegetation = VEG_SHRUB;
+              } else {
+                vegetation = VEG_SPARSE_GRASS;
+              }
+            } else {
+              let rock = false;
+              let gilgai = false;
+              let mott = false;
+
+              for (const patch of rockPatches) {
+                if (Math.hypot(x - patch.x, y - patch.y) < patch.radius) { rock = true; break; }
+              }
+              if (!rock) {
+                for (const patch of gilgaiPatches) {
+                  if (Math.hypot(x - patch.x, y - patch.y) < patch.radius) { gilgai = true; break; }
+                }
+              }
+              if (!rock && !gilgai) {
+                for (const patch of prairieMotts) {
+                  if (Math.hypot(x - patch.x, y - patch.y) < patch.radius) { mott = true; break; }
+                }
+              }
+
+              if (rock) {
+                terrain = TYPE_ROCK;
+                const random = Math.random();
+                if (random < 0.69) vegetation = VEG_TREE;
+                else if (random < 0.84) vegetation = VEG_SHRUB;
+                else vegetation = VEG_SPARSE_GRASS;
+              } else if (gilgai) {
+                terrain = TYPE_WETLAND;
+                vegetation = Math.random() < 0.2 ? VEG_BARE : VEG_SPARSE_GRASS;
+              } else if (mott) {
+                vegetation = Math.random() < 0.82 ? VEG_TREE : VEG_SHRUB;
+              } else {
+                const random = Math.random();
+                if (random < 0.018) vegetation = VEG_SHRUB;
+                else if (random < 0.023) vegetation = VEG_BARE;
+                else if (random < 0.06) vegetation = VEG_SPARSE_GRASS;
+              }
+            }
+            row.push(createCell(x, y, terrain, vegetation));
+          }
+          newGrid.push(row);
+        }
+
+        const herdSizes = [];
+        let remainingBison = BISON_COUNT;
+        for (let herdIndex = 0; herdIndex < HERD_COUNT; herdIndex += 1) {
+          const herdsRemaining = HERD_COUNT - herdIndex;
+          if (herdIndex === HERD_COUNT - 1) {
+            herdSizes.push(remainingBison);
+            break;
+          }
+          const averageSize = remainingBison / herdsRemaining;
+          const proposedSize = Math.round(averageSize + (Math.random() - 0.5) * 8);
+          const minimumRemaining = (herdsRemaining - 1) * 15;
+          const safeSize = clamp(proposedSize, 15, remainingBison - minimumRemaining);
+          herdSizes.push(safeSize);
+          remainingBison -= safeSize;
+        }
+
+        for (let herdIndex = 0; herdIndex < HERD_COUNT; herdIndex += 1) {
+          let centerX = 0, centerY = 0, attempts = 0, sufficientlySeparated = false;
+          do {
+            centerX = 10 + Math.random() * (GRID_SIZE - 20);
+            centerY = 10 + Math.random() * (GRID_SIZE - 20);
+            const candidateCell = newGrid[Math.floor(centerY)][Math.floor(centerX)];
+            sufficientlySeparated = newHerds.every(existingHerd => Math.hypot(centerX - existingHerd.centerX, centerY - existingHerd.centerY) > 18);
+            attempts += 1;
+            if (candidateCell.type === TYPE_PRAIRIE && sufficientlySeparated) break;
+          } while (attempts < 1200);
+
+          const direction = Math.random() * Math.PI * 2;
+          const herdSpeed = 0.12 + Math.random() * 0.06;
+          const herd = {
+            id: herdIndex, centerX, centerY,
+            vx: Math.cos(direction) * herdSpeed, vy: Math.sin(direction) * herdSpeed,
+            targetX: 8 + Math.random() * (GRID_SIZE - 16), targetY: 8 + Math.random() * (GRID_SIZE - 16),
+            targetTimer: 300 + Math.floor(Math.random() * 500),
+          };
+          newHerds.push(herd);
+
+          for (let memberIndex = 0; memberIndex < herdSizes[herdIndex]; memberIndex += 1) {
+            let bisonX = centerX, bisonY = centerY, spawnAttempts = 0;
+            do {
+              const angle = Math.random() * Math.PI * 2;
+              const distance = 1.5 + Math.random() * 5;
+              bisonX = clamp(centerX + Math.cos(angle) * distance, 0.05, GRID_SIZE - 0.05);
+              bisonY = clamp(centerY + Math.sin(angle) * distance, 0.05, GRID_SIZE - 0.05);
+              spawnAttempts += 1;
+            } while (spawnAttempts < 100 && newGrid[Math.floor(bisonY)][Math.floor(bisonX)].type !== TYPE_PRAIRIE);
+
+            newBison.push({
+              x: bisonX, y: bisonY, previousX: bisonX, previousY: bisonY,
+              vx: herd.vx + (Math.random() - 0.5) * 0.08, vy: herd.vy + (Math.random() - 0.5) * 0.08,
+              herdId: herdIndex, turnBias: (Math.random() - 0.5) * 0.04,
+            });
+          }
+        }
+
+        gridRef.current = newGrid;
+        bisonRef.current = newBison;
+        herdsRef.current = newHerds;
+        tickRef.current = 0;
+        accumulatedTimeRef.current = 0;
+        previousFrameTimeRef.current = 0;
+        setTicks(0);
+        requestAnimationFrame(drawCanvas);
+      }, [drawCanvas]);
+
+      const igniteCell = useCallback((grid, x, y, intensity = 1) => {
+        if (!isInsideGrid(x, y)) return false;
+        const cell = grid[y][x];
+        if (cell.type === TYPE_WATER || cell.onFire > 0 || cell.veg === VEG_BARE) return false;
+        cell.onFire = FIRE_DURATION;
+        cell.fireIntensity = intensity;
+        return true;
+      }, []);
+
+      const igniteRandomPrairieGrass = useCallback((grid, attempts = 300) => {
+        for (let attempt = 0; attempt < attempts; attempt += 1) {
+          const x = Math.floor(Math.random() * GRID_SIZE);
+          const y = Math.floor(Math.random() * GRID_SIZE);
+          const cell = grid[y][x];
+          if (cell.type === TYPE_PRAIRIE && cell.veg === VEG_MATURE_GRASS && cell.onFire === 0) {
+            igniteCell(grid, x, y, 1);
+            return { x, y };
+          }
+        }
+        return null;
+      }, [igniteCell]);
+
+      const updateHerdCenters = useCallback((grid) => {
+        for (const herd of herdsRef.current) {
+          herd.targetTimer -= 1;
+          if (herd.targetTimer <= 0) {
+            let targetX = herd.centerX, targetY = herd.centerY, attempts = 0;
+            do {
+              targetX = 8 + Math.random() * (GRID_SIZE - 16);
+              targetY = 8 + Math.random() * (GRID_SIZE - 16);
+              attempts += 1;
+            } while (attempts < 300 && grid[Math.floor(targetY)][Math.floor(targetX)].type !== TYPE_PRAIRIE);
+            herd.targetX = targetX;
+            herd.targetY = targetY;
+            herd.targetTimer = 300 + Math.floor(Math.random() * 600);
+          }
+
+          const directionX = herd.targetX - herd.centerX;
+          const directionY = herd.targetY - herd.centerY;
+          const distance = Math.hypot(directionX, directionY);
+
+          if (distance > 0.001) {
+            herd.vx += (directionX / distance) * HERD_WANDER_STRENGTH;
+            herd.vy += (directionY / distance) * HERD_WANDER_STRENGTH;
+          }
+
+          const randomTurn = (Math.random() - 0.5) * 0.07;
+          const cosine = Math.cos(randomTurn);
+          const sine = Math.sin(randomTurn);
+          const previousHerdVx = herd.vx;
+          const previousHerdVy = herd.vy;
+          herd.vx = previousHerdVx * cosine - previousHerdVy * sine;
+          herd.vy = previousHerdVx * sine + previousHerdVy * cosine;
+
+          const herdVelocity = Math.hypot(herd.vx, herd.vy);
+          if (herdVelocity > 0.001) {
+            herd.vx = (herd.vx / herdVelocity) * 0.15;
+            herd.vy = (herd.vy / herdVelocity) * 0.15;
+          }
+
+          const proposedX = clamp(herd.centerX + herd.vx, 1, GRID_SIZE - 2);
+          const proposedY = clamp(herd.centerY + herd.vy, 1, GRID_SIZE - 2);
+          const destination = grid[Math.floor(proposedY)][Math.floor(proposedX)];
+
+          if (destination.type === TYPE_PRAIRIE || destination.type === TYPE_WETLAND) {
+            herd.centerX = proposedX;
+            herd.centerY = proposedY;
+          } else {
+            herd.vx *= -1;
+            herd.vy *= -1;
+            herd.targetTimer = 0;
+          }
+        }
+      }, []);
+
+      const runEcologicalTick = useCallback(() => {
+        const currentGrid = gridRef.current;
+        if (!currentGrid.length) return;
+        const nextGrid = currentGrid.map((row) => row.map((cell) => ({ ...cell })));
+
+        for (let y = 0; y < GRID_SIZE; y += 1) {
+          for (let x = 0; x < GRID_SIZE; x += 1) {
+            const source = currentGrid[y][x];
+            const target = nextGrid[y][x];
+
+            if (source.type === TYPE_WATER) { target.veg = VEG_BARE; target.onFire = 0; target.fireIntensity = 0; continue; }
+            if (source.onFire > 0) continue;
+
+            if (source.veg === VEG_BARE) {
+              let chance = GRASS_REGROWTH_CHANCE;
+              if (source.type === TYPE_WETLAND) chance *= 2.2;
+              else if (source.type === TYPE_RIPARIAN) chance *= 1.65;
+              else if (source.type === TYPE_ROCK) chance *= 0.45;
+              if (Math.random() < chance) target.veg = VEG_SPARSE_GRASS;
+            }
+
+            if (source.veg === VEG_SPARSE_GRASS) {
+              let chance = GRASS_MATURATION_CHANCE;
+              if (source.type === TYPE_WETLAND) chance *= 0.18;
+              else if (source.type === TYPE_RIPARIAN) chance *= 0.5;
+              else if (source.type === TYPE_ROCK) chance *= 0.35;
+              if (Math.random() < chance) target.veg = VEG_MATURE_GRASS;
+            }
+
+            if (source.type === TYPE_PRAIRIE && (source.veg === VEG_BARE || source.veg === VEG_SPARSE_GRASS || source.veg === VEG_MATURE_GRASS)) {
+              if (Math.random() < SHRUB_BIRD_DROP_CHANCE * getGrassCompetitionMultiplier(source.veg)) {
+                target.veg = VEG_SHRUB;
+              }
+            }
+
+            if (source.veg === VEG_SAPLING) {
+              target.saplingAge = source.saplingAge + 1;
+              if (target.saplingAge >= SAPLING_MATURATION_TIME) {
+                target.veg = VEG_TREE;
+                target.saplingAge = 0;
+              }
+            }
+
+            if (source.veg === VEG_SHRUB && Math.random() < SHRUB_LOCAL_SPREAD_CHANCE) {
+              const neighbor = ALL_NEIGHBORS[Math.floor(Math.random() * ALL_NEIGHBORS.length)];
+              const nx = x + neighbor[0];
+              const ny = y + neighbor[1];
+              if (isInsideGrid(nx, ny)) {
+                const dest = currentGrid[ny][nx];
+                if (dest.type !== TYPE_WATER && dest.onFire === 0 && (dest.veg === VEG_BARE || dest.veg === VEG_SPARSE_GRASS || dest.veg === VEG_MATURE_GRASS)) {
+                  if (Math.random() < getGrassCompetitionMultiplier(dest.veg)) {
+                    nextGrid[ny][nx].veg = VEG_SHRUB;
+                    nextGrid[ny][nx].saplingAge = 0;
+                  }
+                }
+              }
+            }
+
+            if (source.veg === VEG_TREE && Math.random() < TREE_SEED_CHANCE) {
+              const radius = 1 + Math.floor(Math.random() * 3);
+              const dx = Math.floor(Math.random() * (radius * 2 + 1)) - radius;
+              const dy = Math.floor(Math.random() * (radius * 2 + 1)) - radius;
+              const nx = x + dx;
+              const ny = y + dy;
+              if (isInsideGrid(nx, ny) && !(dx === 0 && dy === 0)) {
+                const dest = currentGrid[ny][nx];
+                if (dest.type !== TYPE_WATER && dest.onFire === 0 && (dest.veg === VEG_BARE || dest.veg === VEG_SPARSE_GRASS || dest.veg === VEG_MATURE_GRASS || dest.veg === VEG_SHRUB)) {
+                  const chance = getTreeTerrainMultiplier(dest.type) * getGrassCompetitionMultiplier(dest.veg);
+                  if (Math.random() < chance) {
+                    nextGrid[ny][nx].veg = VEG_SAPLING;
+                    nextGrid[ny][nx].saplingAge = 0;
+                  }
+                }
+              }
+            }
+          }
+        }
+
+        for (let y = 0; y < GRID_SIZE; y += 1) {
+          for (let x = 0; x < GRID_SIZE; x += 1) {
+            const source = currentGrid[y][x];
+            if (source.onFire <= 0) continue;
+            const target = nextGrid[y][x];
+            target.onFire = Math.max(0, source.onFire - 1);
+
+            if (target.onFire > 0) {
+              for (const neighbor of CARDINAL_NEIGHBORS) {
+                const nx = x + neighbor[0];
+                const ny = y + neighbor[1];
+                if (!isInsideGrid(nx, ny)) continue;
+                const nSource = currentGrid[ny][nx];
+                const nTarget = nextGrid[ny][nx];
+                if (nSource.type === TYPE_WATER || nSource.onFire > 0 || nTarget.onFire > 0) continue;
+                
+                const ignitionChance = (FIRE_IGNITION_CHANCE[nSource.veg] || 0) * getTerrainFireMultiplier(nSource.type);
+                if (Math.random() < ignitionChance) {
+                  nTarget.onFire = FIRE_DURATION;
+                  nTarget.fireIntensity = clamp(source.fireIntensity * 0.82 + (FIRE_IGNITION_CHANCE[nSource.veg] || 0) * 0.75, 0.15, 1.5);
+                }
+              }
+            } else {
+              const intensity = clamp(source.fireIntensity || 0.5, 0, 1.5);
+              if (source.veg === VEG_MATURE_GRASS || source.veg === VEG_SPARSE_GRASS) {
+                target.veg = VEG_BARE;
+              } else if (source.veg === VEG_SHRUB) {
+                if (Math.random() < clamp(0.65 + (intensity - 0.7) * 0.15, 0.5, 0.82)) target.veg = VEG_BARE;
+              } else if (source.veg === VEG_SAPLING) {
+                if (Math.random() < clamp(0.75 + (intensity - 0.7) * 0.15, 0.62, 0.92)) { target.veg = VEG_BARE; target.saplingAge = 0; }
+              } else if (source.veg === VEG_TREE) {
+                let mortality = source.type === TYPE_PRAIRIE ? clamp(0.25 + (intensity - 0.7) * 0.12, 0.16, 0.42) : (source.type === TYPE_ROCK ? 0.1 : 0.025);
+                if (Math.random() < mortality) target.veg = VEG_BARE;
+              }
+              target.fireIntensity = 0;
+            }
+          }
+        }
+
+        if (lightningActiveRef.current && Math.random() < LIGHTNING_EVENT_CHANCE) igniteRandomPrairieGrass(nextGrid);
+
+        if (indigenousBurnsActiveRef.current && Math.random() < INDIGENOUS_BURN_CHANCE) {
+          const ignition = igniteRandomPrairieGrass(nextGrid);
+          if (ignition) {
+            const horizontal = Math.random() < 0.5;
+            for (let offset = -3; offset <= 3; offset += 1) {
+              const ix = ignition.x + (horizontal ? offset : 0);
+              const iy = ignition.y + (horizontal ? 0 : offset);
+              if (isInsideGrid(ix, iy) && nextGrid[iy][ix].type === TYPE_PRAIRIE && nextGrid[iy][ix].veg === VEG_MATURE_GRASS) {
+                igniteCell(nextGrid, ix, iy, 0.85);
+              }
+            }
+          }
+        }
+
+        if (bisonActiveRef.current) {
+          updateHerdCenters(nextGrid);
+          for (const bison of bisonRef.current) {
+            bison.previousX = bison.x;
+            bison.previousY = bison.y;
+            const herd = herdsRef.current[bison.herdId];
+
+            if (herd) {
+              const dx = herd.centerX - bison.x;
+              const dy = herd.centerY - bison.y;
+              const dist = Math.hypot(dx, dy);
+              if (dist > 0.001) {
+                const cohesion = dist > 8 ? HERD_COHESION * 2.5 : HERD_COHESION;
+                bison.vx += (dx / dist) * cohesion;
+                bison.vy += (dy / dist) * cohesion;
+              }
+              bison.vx += (herd.vx - bison.vx) * HERD_ALIGNMENT;
+              bison.vy += (herd.vy - bison.vy) * HERD_ALIGNMENT;
+            }
+
+            for (const other of bisonRef.current) {
+              if (other === bison || other.herdId !== bison.herdId) continue;
+              const sx = bison.x - other.x;
+              const sy = bison.y - other.y;
+              const sDist = Math.hypot(sx, sy);
+              if (sDist > 0 && sDist < 1.8) {
+                bison.vx += (sx / sDist) * BISON_SEPARATION;
+                bison.vy += (sy / sDist) * BISON_SEPARATION;
+              }
+            }
+
+            if (Math.random() < 0.12) {
+              const turn = (Math.random() - 0.5) * 0.18 + bison.turnBias;
+              const cos = Math.cos(turn), sin = Math.sin(turn);
+              const previousBisonVx = bison.vx;
+              const previousBisonVy = bison.vy;
+              bison.vx = previousBisonVx * cos - previousBisonVy * sin;
+              bison.vy = previousBisonVx * sin + previousBisonVy * cos;
+            }
+
+            bison.x = clamp(bison.x + bison.vx, 0.05, GRID_SIZE - 0.05);
+            bison.y = clamp(bison.y + bison.vy, 0.05, GRID_SIZE - 0.05);
+            if (bison.x <= 0.05 || bison.x >= GRID_SIZE - 0.05) bison.vx *= -1;
+            if (bison.y <= 0.05 || bison.y >= GRID_SIZE - 0.05) bison.vy *= -1;
+
+            let cellX = Math.floor(bison.x), cellY = Math.floor(bison.y);
+            let occupiedCell = nextGrid[cellY][cellX];
+
+            if (occupiedCell.type === TYPE_WATER || occupiedCell.type === TYPE_RIPARIAN || occupiedCell.type === TYPE_ROCK) {
+              bison.x = bison.previousX;
+              bison.y = bison.previousY;
+              const turn = Math.PI * (0.55 + Math.random() * 0.45);
+              const cos = Math.cos(turn), sin = Math.sin(turn);
+              const blockedVx = bison.vx;
+              const blockedVy = bison.vy;
+              bison.vx = blockedVx * cos - blockedVy * sin;
+              bison.vy = blockedVx * sin + blockedVy * cos;
+              cellX = Math.floor(bison.x);
+              cellY = Math.floor(bison.y);
+              occupiedCell = nextGrid[cellY][cellX];
+            }
+
+            const currentSpeed = Math.hypot(bison.vx, bison.vy);
+            if (currentSpeed > MAX_BISON_SPEED) {
+              bison.vx = (bison.vx / currentSpeed) * MAX_BISON_SPEED;
+              bison.vy = (bison.vy / currentSpeed) * MAX_BISON_SPEED;
+            } else if (currentSpeed < MIN_BISON_SPEED) {
+              const angle = Math.random() * Math.PI * 2;
+              bison.vx = Math.cos(angle) * 0.14;
+              bison.vy = Math.sin(angle) * 0.14;
+            }
+
+            if (occupiedCell.veg === VEG_MATURE_GRASS) occupiedCell.veg = VEG_SPARSE_GRASS;
+            else if (occupiedCell.veg === VEG_SPARSE_GRASS && Math.random() < 0.09) occupiedCell.veg = VEG_BARE;
+            else if (occupiedCell.veg === VEG_SHRUB && Math.random() < 0.1) occupiedCell.veg = VEG_SPARSE_GRASS;
+            else if (occupiedCell.veg === VEG_SAPLING && Math.random() < 0.17) { occupiedCell.veg = VEG_BARE; occupiedCell.saplingAge = 0; }
+
+            if (Math.random() < 0.012) {
+              occupiedCell.veg = VEG_BARE;
+              occupiedCell.saplingAge = 0;
+              for (const neighbor of ALL_NEIGHBORS) {
+                const nx = cellX + neighbor[0], ny = cellY + neighbor[1];
+                if (isInsideGrid(nx, ny) && Math.random() < 0.36) {
+                  const nearby = nextGrid[ny][nx];
+                  if (nearby.type === TYPE_PRAIRIE && nearby.veg !== VEG_TREE) { nearby.veg = VEG_BARE; nearby.saplingAge = 0; }
+                }
+              }
+            } else if (Math.random() < 0.045) {
+              const n = CARDINAL_NEIGHBORS[Math.floor(Math.random() * CARDINAL_NEIGHBORS.length)];
+              const nx = cellX + n[0], ny = cellY + n[1];
+              if (isInsideGrid(nx, ny)) {
+                const nearby = nextGrid[ny][nx];
+                if (nearby.type === TYPE_PRAIRIE && nearby.veg === VEG_MATURE_GRASS) nearby.veg = VEG_SPARSE_GRASS;
+                else if (nearby.type === TYPE_PRAIRIE && (nearby.veg === VEG_SHRUB || nearby.veg === VEG_SAPLING) && Math.random() < 0.16) { nearby.veg = VEG_BARE; nearby.saplingAge = 0; }
+              }
+            }
+          }
+        }
+
+        gridRef.current = nextGrid;
+        tickRef.current += 1;
+        if (tickRef.current % 4 === 0) setTicks(tickRef.current);
+      }, [igniteCell, igniteRandomPrairieGrass, updateHerdCenters]);
+
+      const animate = useCallback((timestamp) => {
+        if (previousFrameTimeRef.current === 0) previousFrameTimeRef.current = timestamp;
+        const elapsed = Math.min(timestamp - previousFrameTimeRef.current, 250);
+        previousFrameTimeRef.current = timestamp;
+
+        if (runningRef.current) {
+          accumulatedTimeRef.current += elapsed * speedRef.current;
+          let stepsThisFrame = 0;
+          while (accumulatedTimeRef.current >= ECOLOGICAL_STEP_MS && stepsThisFrame < 10) {
+            runEcologicalTick();
+            accumulatedTimeRef.current -= ECOLOGICAL_STEP_MS;
+            stepsThisFrame += 1;
+          }
+        }
+        drawCanvas();
+        animationFrameRef.current = requestAnimationFrame(animate);
+      }, [drawCanvas, runEcologicalTick]);
+
+      useEffect(() => {
+        initializeSimulation();
+        animationFrameRef.current = requestAnimationFrame(animate);
+        return () => { if (animationFrameRef.current) cancelAnimationFrame(animationFrameRef.current); };
+      }, [animate, initializeSimulation]);
+
+      const handleReset = () => { initializeSimulation(); };
+
+      const triggerManualFire = () => {
+        const grid = gridRef.current;
+        if (!grid.length) return;
+        const candidates = [];
+        for (let y = 0; y < GRID_SIZE; y += 1) {
+          for (let x = 0; x < GRID_SIZE; x += 1) {
+            if (grid[y][x].type === TYPE_PRAIRIE && grid[y][x].veg === VEG_MATURE_GRASS && grid[y][x].onFire === 0) candidates.push({ x, y });
+          }
+        }
+        if (!candidates.length) return;
+        const target = candidates[Math.floor(Math.random() * candidates.length)];
+        igniteCell(grid, target.x, target.y, 1);
+        drawCanvas();
+      };
+
+      return (
+        <div className="flex min-h-screen w-full flex-col bg-slate-100 font-sans text-slate-900 md:h-screen md:flex-row">
+          <aside className="z-10 flex w-full flex-col gap-4 overflow-y-auto border-r border-slate-200 bg-white p-5 shadow-xl md:w-[350px] md:min-w-[350px]">
+            <header>
+              <h1 className="text-2xl font-bold tracking-tight text-slate-800">Blackland Transition</h1>
+              <p className="mt-1 text-sm text-slate-500">Pre-European Geographic Equilibrium</p>
+              <p className="mt-2 text-xs leading-relaxed text-slate-500">A conceptual Central Texas prairie–woodland model exploring hydrology, fire, grazing, and woody succession.</p>
+            </header>
+
+            <section className="space-y-3">
+              <div className="rounded-xl border border-slate-200 bg-slate-100 p-4">
+                <div className="mb-2 flex items-center justify-between"><span className="text-xs font-semibold uppercase tracking-wide text-slate-500">Simulation Time</span></div>
+                <div className="font-mono text-3xl font-light text-slate-700">{ticks}<span className="ml-2 text-sm text-slate-500">ticks</span></div>
+              </div>
+
+              <div className="flex gap-2">
+                <button type="button" onClick={() => setIsRunning(c => !c)} className={`flex-1 rounded-lg py-2 font-medium transition-colors ${isRunning ? "bg-red-100 text-red-700 hover:bg-red-200" : "bg-green-600 text-white hover:bg-green-700"}`}>{isRunning ? "Pause" : "Start"}</button>
+                <button type="button" onClick={handleReset} className="rounded-lg bg-slate-200 px-4 py-2 font-medium text-slate-700 transition-colors hover:bg-slate-300">Reset</button>
+              </div>
+
+              <div className="flex gap-2 pt-1">
+                <button type="button" onClick={() => setSpeed(1)} className={`flex-1 rounded-lg py-1.5 text-sm font-medium transition-colors ${speed === 1 ? "bg-slate-700 text-white" : "bg-slate-200 text-slate-700 hover:bg-slate-300"}`}>1x Speed</button>
+                <button type="button" onClick={() => setSpeed(2)} className={`flex-1 rounded-lg py-1.5 text-sm font-medium transition-colors ${speed === 2 ? "bg-slate-700 text-white" : "bg-slate-200 text-slate-700 hover:bg-slate-300"}`}>2x Speed</button>
+                <button type="button" onClick={() => setSpeed(4)} className={`flex-1 rounded-lg py-1.5 text-sm font-medium transition-colors ${speed === 4 ? "bg-slate-700 text-white" : "bg-slate-200 text-slate-700 hover:bg-slate-300"}`}>4x Speed</button>
+              </div>
+            </section>
+            
+            <hr className="my-1 border-slate-200" />
+
+            <section className="space-y-3">
+              <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-500">Ecological Drivers</h2>
+              <label className="flex cursor-pointer items-center justify-between rounded-lg border border-slate-200 p-3 transition-colors hover:bg-slate-50"><span className="flex items-center gap-3"><span className="h-4 w-4 rounded-full bg-[#4e342e]" /><span className="text-sm font-medium text-slate-700">Migratory Bison Herds</span></span><input type="checkbox" checked={bisonActive} onChange={(e) => setBisonActive(e.target.checked)} className="h-5 w-5 rounded text-green-600 focus:ring-green-500" /></label>
+              <label className="flex cursor-pointer items-center justify-between rounded-lg border border-slate-200 p-3 transition-colors hover:bg-slate-50"><span className="flex items-center gap-3"><span className="h-4 w-4 rounded-full bg-[#ffc107]" /><span className="text-sm font-medium text-slate-700">Lightning Fires</span></span><input type="checkbox" checked={lightningActive} onChange={(e) => setLightningActive(e.target.checked)} className="h-5 w-5 rounded text-green-600 focus:ring-green-500" /></label>
+              <label className="flex cursor-pointer items-center justify-between rounded-lg border border-slate-200 p-3 transition-colors hover:bg-slate-50"><span className="flex items-center gap-3"><span className="h-4 w-4 rounded-full bg-[#ff5722]" /><span className="text-sm font-medium text-slate-700">Indigenous Burns</span></span><input type="checkbox" checked={indigenousBurnsActive} onChange={(e) => setIndigenousBurnsActive(e.target.checked)} className="h-5 w-5 rounded text-green-600 focus:ring-green-500" /></label>
+            </section>
+
+            <button type="button" onClick={triggerManualFire} className="w-full rounded-lg border border-orange-200 bg-orange-100 py-2 font-medium text-orange-800 transition-colors hover:bg-orange-200">Ignite Manual Fire</button>
+
+            <section className="mt-auto pt-2">
+              <h3 className="mb-2 text-xs font-bold uppercase tracking-wide text-slate-700">Native Plant Key</h3>
+              <ul className="space-y-2 text-[11px] leading-tight text-slate-600">
+                <li className="flex items-start gap-2"><span className="mt-0.5 h-3 w-3 flex-shrink-0 bg-[#004d40]" /><span><b>Riparian Corridor:</b> <i>Salix nigra</i>, <i>Carya illinoinensis</i>, <i>Celtis</i></span></li>
+                <li className="flex items-start gap-2"><span className="mt-0.5 h-3 w-3 flex-shrink-0 bg-[#1b5e20]" /><span><b>Balcones Escarpment:</b> <i>Quercus fusiformis</i>, <i>Juniperus ashei</i></span></li>
+                <li className="flex items-start gap-2"><span className="mt-0.5 h-3 w-3 flex-shrink-0 bg-[#2e7d32]" /><span><b>Prairie Motts:</b> Upland <i>Quercus</i> &amp; <i>Prunus</i></span></li>
+                <li className="flex items-start gap-2"><span className="mt-0.5 h-3 w-3 flex-shrink-0 bg-[#827717]" /><span><b>Woody Shrubs:</b> <i>Rhus</i>, <i>Acacia</i>, <i>Baccharis</i></span></li>
+                <li className="flex items-start gap-2"><span className="mt-0.5 h-3 w-3 flex-shrink-0 bg-[#7cb342]" /><span><b>Mature Grasses:</b> <i>Andropogon</i>, <i>Bouteloua</i>, <i>Panicum</i></span></li>
+                <li className="flex items-start gap-2"><span className="mt-0.5 flex h-3 w-3 flex-shrink-0 overflow-hidden"><span className="h-full w-1/2 bg-[#0288d1]" /><span className="h-full w-1/2 bg-[#d2b48c]" /></span><span>Water, Bare Dirt &amp; Gilgai Depressions</span></li>
+              </ul>
+            </section>
+          </aside>
+
+          <main className="flex flex-1 items-center justify-center overflow-auto bg-slate-200 p-3 md:p-8">
+            <div className="inline-block max-h-full max-w-full rounded-xl bg-white p-2 shadow-2xl">
+              <canvas ref={canvasRef} width={CANVAS_SIZE} height={CANVAS_SIZE} className="block max-h-[calc(100vh-4rem)] max-w-full rounded-lg" style={{ imageRendering: "pixelated", aspectRatio: "1 / 1" }} aria-label="Interactive Blackland Prairie transition simulation" />
+            </div>
+          </main>
+        </div>
+      );
+    }
+
+    const root = ReactDOM.createRoot(document.getElementById('root'));
+    root.render(<App />);
+  </script>
+</body>
+</html>
