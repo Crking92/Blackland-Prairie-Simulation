@@ -3,7 +3,11 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Blackland Prairie Simulation</title>
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+  <meta http-equiv="Pragma" content="no-cache">
+  <meta http-equiv="Expires" content="0">
+  <title>Blackland Prairie–Balcones Transition Simulation</title>
+  <meta name="description" content="An interactive educational model of how fire, Indigenous burning, bison grazing, hydrology, and succession shaped the Central Texas Blackland Prairie–Balcones transition zone.">
   
   <!-- Load Tailwind CSS -->
   <script src="https://cdn.tailwindcss.com"></script>
@@ -17,6 +21,7 @@
 </head>
 <body class="bg-slate-100">
   <div id="root"></div>
+  <noscript>This interactive simulation requires JavaScript.</noscript>
 
   <script type="text/babel">
     const { useState, useEffect, useRef, useCallback } = React;
@@ -126,6 +131,15 @@
       const [isRunning, setIsRunning] = useState(true);
       const [ticks, setTicks] = useState(0);
       const [speed, setSpeed] = useState(1);
+      const [stats, setStats] = useState({
+        grass: 0,
+        woody: 0,
+        bare: 0,
+        burning: 0,
+        shrubs: 0,
+        saplings: 0,
+        trees: 0,
+      });
 
       const [bisonActive, setBisonActive] = useState(true);
       const [lightningActive, setLightningActive] = useState(true);
@@ -142,6 +156,53 @@
       useEffect(() => { bisonActiveRef.current = bisonActive; }, [bisonActive]);
       useEffect(() => { lightningActiveRef.current = lightningActive; }, [lightningActive]);
       useEffect(() => { indigenousBurnsActiveRef.current = indigenousBurnsActive; }, [indigenousBurnsActive]);
+
+      const calculateStats = useCallback((grid) => {
+        if (!grid.length) return;
+
+        let landCells = 0;
+        let grass = 0;
+        let woody = 0;
+        let bare = 0;
+        let burning = 0;
+        let shrubs = 0;
+        let saplings = 0;
+        let trees = 0;
+
+        for (const row of grid) {
+          for (const cell of row) {
+            if (cell.type === TYPE_WATER) continue;
+            landCells += 1;
+            if (cell.onFire > 0) burning += 1;
+            if (cell.veg === VEG_BARE) bare += 1;
+            if (cell.veg === VEG_SPARSE_GRASS || cell.veg === VEG_MATURE_GRASS) grass += 1;
+            if (cell.veg === VEG_SHRUB) shrubs += 1;
+            if (cell.veg === VEG_SAPLING) saplings += 1;
+            if (cell.veg === VEG_TREE) trees += 1;
+          }
+        }
+
+        woody = shrubs + saplings + trees;
+        const pct = (value) => landCells ? Number(((value / landCells) * 100).toFixed(1)) : 0;
+
+        setStats({
+          grass: pct(grass),
+          woody: pct(woody),
+          bare: pct(bare),
+          burning: pct(burning),
+          shrubs: pct(shrubs),
+          saplings: pct(saplings),
+          trees: pct(trees),
+        });
+      }, []);
+
+      const getLandscapeMessage = () => {
+        if (ticks < 40) return "The starting landscape is mostly prairie with woody cover concentrated in riparian corridors, rocky slopes, and scattered motts.";
+        if (stats.woody >= 45) return "Woody plants now occupy a large share of the landscape. Compare this run with fire and grazing restored.";
+        if (stats.woody >= 28) return "Woody cover is expanding beyond protected corridors and motts, indicating increasing encroachment.";
+        if (stats.grass >= 60 && stats.woody < 25) return "Grassland remains dominant while woody vegetation persists mainly in protected landscape positions.";
+        return "The landscape is shifting. Watch how disturbances and terrain redistribute grass, bare soil, shrubs, and trees.";
+      };
 
       const drawCanvas = useCallback(() => {
         const canvas = canvasRef.current;
@@ -421,8 +482,9 @@
         accumulatedTimeRef.current = 0;
         previousFrameTimeRef.current = 0;
         setTicks(0);
+        calculateStats(newGrid);
         requestAnimationFrame(drawCanvas);
-      }, [drawCanvas]);
+      }, [calculateStats, drawCanvas]);
 
       const igniteCell = useCallback((grid, x, y, intensity = 1) => {
         if (!isInsideGrid(x, y)) return false;
@@ -734,7 +796,8 @@
         gridRef.current = nextGrid;
         tickRef.current += 1;
         if (tickRef.current % 4 === 0) setTicks(tickRef.current);
-      }, [igniteCell, igniteRandomPrairieGrass, updateHerdCenters]);
+        if (tickRef.current % 12 === 0) calculateStats(nextGrid);
+      }, [calculateStats, igniteCell, igniteRandomPrairieGrass, updateHerdCenters]);
 
       const animate = useCallback((timestamp) => {
         if (previousFrameTimeRef.current === 0) previousFrameTimeRef.current = timestamp;
@@ -762,6 +825,23 @@
 
       const handleReset = () => { initializeSimulation(); };
 
+      const igniteAtCanvasPoint = (event) => {
+        const canvas = canvasRef.current;
+        const grid = gridRef.current;
+        if (!canvas || !grid.length) return;
+
+        const rect = canvas.getBoundingClientRect();
+        const scaleX = canvas.width / rect.width;
+        const scaleY = canvas.height / rect.height;
+        const x = Math.floor(((event.clientX - rect.left) * scaleX) / CELL_SIZE);
+        const y = Math.floor(((event.clientY - rect.top) * scaleY) / CELL_SIZE);
+
+        if (igniteCell(grid, x, y, 1)) {
+          calculateStats(grid);
+          drawCanvas();
+        }
+      };
+
       const triggerManualFire = () => {
         const grid = gridRef.current;
         if (!grid.length) return;
@@ -774,16 +854,18 @@
         if (!candidates.length) return;
         const target = candidates[Math.floor(Math.random() * candidates.length)];
         igniteCell(grid, target.x, target.y, 1);
+        calculateStats(grid);
         drawCanvas();
       };
 
       return (
         <div className="flex min-h-screen w-full flex-col bg-slate-100 font-sans text-slate-900 md:h-screen md:flex-row">
-          <aside className="z-10 flex w-full flex-col gap-4 overflow-y-auto border-r border-slate-200 bg-white p-5 shadow-xl md:w-[350px] md:min-w-[350px]">
+          <aside className="z-10 flex w-full flex-col gap-4 overflow-y-auto border-r border-slate-200 bg-white p-5 shadow-xl md:w-[400px] md:min-w-[400px]">
             <header>
-              <h1 className="text-2xl font-bold tracking-tight text-slate-800">Blackland Transition</h1>
+              <div className="mb-2 flex items-center justify-between gap-3"><h1 className="text-2xl font-bold tracking-tight text-slate-800">Blackland Transition</h1><span className="rounded-full bg-green-700 px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide text-white">v2.0</span></div>
               <p className="mt-1 text-sm text-slate-500">Pre-European Geographic Equilibrium</p>
               <p className="mt-2 text-xs leading-relaxed text-slate-500">A conceptual Central Texas prairie–woodland model exploring hydrology, fire, grazing, and woody succession.</p>
+              <p className="mt-2 rounded-lg border border-amber-200 bg-amber-50 p-2 text-[11px] leading-relaxed text-amber-900"><b>Educational model:</b> This simplifies complex historical ecosystems and does not reproduce exact fire intervals, animal densities, or vegetation percentages.</p>
             </header>
 
             <section className="space-y-3">
@@ -804,6 +886,25 @@
               </div>
             </section>
             
+            <section className="space-y-3">
+              <div className="flex items-center justify-between">
+                <h2 className="text-sm font-bold uppercase tracking-wide text-green-800">Live Ecosystem Dashboard</h2>
+                <span className="text-[10px] text-slate-400">land cells</span>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3 text-xs">
+                <div className="rounded-xl border-2 border-green-300 bg-green-50 p-3 shadow-sm"><div className="text-slate-500">Grassland</div><div className="text-2xl font-bold text-green-800">{stats.grass}%</div></div>
+                <div className="rounded-xl border-2 border-emerald-300 bg-emerald-50 p-3 shadow-sm"><div className="text-slate-500">Woody cover</div><div className="text-2xl font-bold text-emerald-900">{stats.woody}%</div></div>
+                <div className="rounded-xl border-2 border-stone-300 bg-stone-50 p-3 shadow-sm"><div className="text-slate-500">Bare ground</div><div className="text-2xl font-bold text-stone-700">{stats.bare}%</div></div>
+                <div className="rounded-xl border-2 border-orange-300 bg-orange-50 p-3 shadow-sm"><div className="text-slate-500">Actively burning</div><div className="text-2xl font-bold text-orange-800">{stats.burning}%</div></div>
+              </div>
+
+              <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-[11px] leading-relaxed text-slate-600">
+                <b className="text-slate-700">What the model is showing:</b> {getLandscapeMessage()}
+                <div className="mt-2 text-slate-500">Woody detail: {stats.shrubs}% shrubs · {stats.saplings}% saplings · {stats.trees}% trees</div>
+              </div>
+            </section>
+
             <hr className="my-1 border-slate-200" />
 
             <section className="space-y-3">
@@ -813,7 +914,11 @@
               <label className="flex cursor-pointer items-center justify-between rounded-lg border border-slate-200 p-3 transition-colors hover:bg-slate-50"><span className="flex items-center gap-3"><span className="h-4 w-4 rounded-full bg-[#ff5722]" /><span className="text-sm font-medium text-slate-700">Indigenous Burns</span></span><input type="checkbox" checked={indigenousBurnsActive} onChange={(e) => setIndigenousBurnsActive(e.target.checked)} className="h-5 w-5 rounded text-green-600 focus:ring-green-500" /></label>
             </section>
 
-            <button type="button" onClick={triggerManualFire} className="w-full rounded-lg border border-orange-200 bg-orange-100 py-2 font-medium text-orange-800 transition-colors hover:bg-orange-200">Ignite Manual Fire</button>
+            <button type="button" onClick={triggerManualFire} className="w-full rounded-lg border border-orange-200 bg-orange-100 py-2 font-medium text-orange-800 transition-colors hover:bg-orange-200">Ignite Random Prairie Fire</button>
+
+            <section className="rounded-lg border border-blue-200 bg-blue-50 p-3 text-[11px] leading-relaxed text-blue-900">
+              <b className="text-sm">Guided experiment:</b> <br />1. Run all drivers for 500 ticks.<br />2. Record woody cover.<br />3. Reset and turn fire and bison off.<br />4. Compare the result at 500 ticks.<br /><span className="mt-1 inline-block font-medium">Tip: click directly on mature grass to ignite a fire.</span>
+            </section>
 
             <section className="mt-auto pt-2">
               <h3 className="mb-2 text-xs font-bold uppercase tracking-wide text-slate-700">Native Plant Key</h3>
@@ -830,7 +935,7 @@
 
           <main className="flex flex-1 items-center justify-center overflow-auto bg-slate-200 p-3 md:p-8">
             <div className="inline-block max-h-full max-w-full rounded-xl bg-white p-2 shadow-2xl">
-              <canvas ref={canvasRef} width={CANVAS_SIZE} height={CANVAS_SIZE} className="block max-h-[calc(100vh-4rem)] max-w-full rounded-lg" style={{ imageRendering: "pixelated", aspectRatio: "1 / 1" }} aria-label="Interactive Blackland Prairie transition simulation" />
+              <canvas ref={canvasRef} onClick={igniteAtCanvasPoint} width={CANVAS_SIZE} height={CANVAS_SIZE} className="block max-h-[calc(100vh-4rem)] max-w-full cursor-crosshair rounded-lg" style={{ imageRendering: "pixelated", aspectRatio: "1 / 1" }} aria-label="Interactive Blackland Prairie transition simulation. Click grassland to ignite a fire." title="Click a burnable grass cell to ignite a fire" />
             </div>
           </main>
         </div>
