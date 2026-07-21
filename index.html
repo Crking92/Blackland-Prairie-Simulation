@@ -148,8 +148,8 @@
 
     .explorer-main {
       display: grid;
-      grid-template-columns: minmax(0, 1fr) 355px;
-      min-height: 660px;
+      grid-template-columns: minmax(0, 1fr) 315px;
+      min-height: 620px;
     }
     .map-column {
       min-width: 0;
@@ -244,6 +244,25 @@
       margin-top: .65rem;
     }
     .toolbar-spacer { flex: 1 1 auto; }
+    .toolbar-menu { position: relative; }
+    .toolbar-menu > details { position: relative; }
+    .toolbar-menu summary { list-style: none; }
+    .toolbar-menu summary::-webkit-details-marker { display: none; }
+    .toolbar-popover {
+      position: absolute;
+      z-index: 12;
+      right: 0;
+      bottom: calc(100% + .45rem);
+      display: grid;
+      min-width: 205px;
+      gap: .35rem;
+      padding: .5rem;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      background: rgba(255,253,247,.98);
+      box-shadow: 0 14px 32px rgba(24,59,43,.18);
+    }
+    .toolbar-popover .button { width: 100%; justify-content: flex-start; }
 
     .button {
       display: inline-flex;
@@ -271,7 +290,7 @@
 
     .sidebar {
       min-width: 0;
-      max-height: 945px;
+      max-height: 850px;
       overflow-y: auto;
       border-left: 1px solid var(--border);
       background: #fffdf8;
@@ -282,6 +301,33 @@
       border-bottom: 1px solid var(--border);
     }
     .side-section:last-child { border-bottom: 0; }
+    details.side-section { padding: 0; }
+    .side-details > summary {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: .75rem;
+      padding: .82rem 1rem;
+      color: var(--forest);
+      font-size: .84rem;
+      font-weight: 850;
+      cursor: pointer;
+      list-style: none;
+    }
+    .side-details > summary::-webkit-details-marker { display: none; }
+    .side-details > summary::after { content: "+"; margin-left: auto; color: var(--muted); font-size: 1rem; }
+    .side-details[open] > summary::after { content: "−"; }
+    .side-details > summary .score-badge { margin-left: auto; }
+    .details-body { padding: 0 1rem .9rem; }
+    .details-body .subheading { margin: .75rem 0 .25rem; color: var(--forest); font-size: .78rem; }
+    .inline-details { margin-top: .55rem; }
+    .inline-details > summary {
+      color: var(--forest-2);
+      font-size: .72rem;
+      font-weight: 800;
+      cursor: pointer;
+    }
+    .inline-details .stat-grid { margin-top: .45rem; }
     .side-title-row { display: flex; align-items: center; justify-content: space-between; gap: .75rem; }
     .side-section h2, .side-section h3 {
       margin: 0;
@@ -558,6 +604,9 @@
       .card-grid, .experiment-grid, .water-diagram, .compare-grid { grid-template-columns: 1fr; }
       .map-toolbar .button { flex: 1 1 calc(50% - .45rem); }
       .toolbar-spacer { display: none; }
+      .toolbar-menu { flex: 1 1 calc(50% - .45rem); }
+      .toolbar-menu summary { width: 100%; }
+      .toolbar-popover { right: 0; left: auto; min-width: min(250px, calc(100vw - 2rem)); }
       .onboarding { top: 2.75rem; }
     }
     @media (prefers-reduced-motion: reduce) {
@@ -579,7 +628,7 @@
       <h1>Central Texas Landscape Explorer</h1>
       <p>Explore how water, fire, grazing, development, fragmentation, invasive species, and restoration shape a San Marcos–Kyle inspired landscape.</p>
     </div>
-    <div class="version-pill">Public release 1.0</div>
+    <div class="version-pill">Public release 1.2</div>
   </header>
 
   <main>
@@ -612,13 +661,20 @@
 
           <div class="map-toolbar" aria-label="Map actions">
             <button class="button primary" id="playButton" type="button">❚❚ Pause</button>
-            <button class="button" id="resetButton" type="button">↻ Reset era</button>
-            <button class="button" id="stormButton" type="button">☁ Add rainstorm</button>
-            <button class="button warn" id="igniteButton" type="button" aria-pressed="false">🔥 Ignite grass</button>
+            <button class="button" id="resetButton" type="button">↻ Reset</button>
+            <button class="button" id="stormButton" type="button">☁ Rainstorm</button>
             <span class="toolbar-spacer"></span>
-            <button class="button" id="whyButton" type="button">Why is it changing?</button>
-            <button class="button" id="compareButton" type="button">Compare eras</button>
-            <button class="button" id="snapshotButton" type="button">Download image</button>
+            <div class="toolbar-menu">
+              <details>
+                <summary class="button">More tools ▾</summary>
+                <div class="toolbar-popover">
+                  <button class="button warn" id="igniteButton" type="button" aria-pressed="false">🔥 Place a fire</button>
+                  <button class="button" id="whyButton" type="button">Why is it changing?</button>
+                  <button class="button" id="compareButton" type="button">Compare eras</button>
+                  <button class="button" id="snapshotButton" type="button">Download map image</button>
+                </div>
+              </details>
+            </div>
           </div>
         </div>
 
@@ -663,23 +719,22 @@
             </div>
           </section>
 
-          <section class="side-section">
-            <div class="side-title-row">
-              <h2>Active ecological drivers</h2>
-              <span class="score-badge" id="driverCount">3 on</span>
+          <details class="side-section side-details">
+            <summary><span>Management controls</span><span class="score-badge" id="driverCount">3 on</span></summary>
+            <div class="details-body">
+              <div class="switch-row"><span>Migratory grazing</span><label class="switch"><input id="grazingToggle" type="checkbox" checked><span aria-hidden="true"></span></label></div>
+              <div class="switch-row"><span>Lightning fire</span><label class="switch"><input id="lightningToggle" type="checkbox" checked><span aria-hidden="true"></span></label></div>
+              <div class="switch-row"><span>Cultural / prescribed fire</span><label class="switch"><input id="managedFireToggle" type="checkbox" checked><span aria-hidden="true"></span></label></div>
+              <div class="switch-row"><span>Fire suppression</span><label class="switch"><input id="suppressionToggle" type="checkbox"><span aria-hidden="true"></span></label></div>
+              <div class="switch-row"><span>Invasive plant pressure</span><label class="switch"><input id="invasiveToggle" type="checkbox"><span aria-hidden="true"></span></label></div>
             </div>
-            <div class="switch-row"><span>Migratory grazing</span><label class="switch"><input id="grazingToggle" type="checkbox" checked><span aria-hidden="true"></span></label></div>
-            <div class="switch-row"><span>Lightning fire</span><label class="switch"><input id="lightningToggle" type="checkbox" checked><span aria-hidden="true"></span></label></div>
-            <div class="switch-row"><span>Cultural / prescribed fire</span><label class="switch"><input id="managedFireToggle" type="checkbox" checked><span aria-hidden="true"></span></label></div>
-            <div class="switch-row"><span>Fire suppression</span><label class="switch"><input id="suppressionToggle" type="checkbox"><span aria-hidden="true"></span></label></div>
-            <div class="switch-row"><span>Invasive plant pressure</span><label class="switch"><input id="invasiveToggle" type="checkbox"><span aria-hidden="true"></span></label></div>
-          </section>
+          </details>
 
           <section class="side-section custom-controls" id="customControls" hidden>
             <h2>Build your own future</h2>
             <p>Adjust land use and management. The same underlying terrain stays in place.</p>
-            <div class="field"><label class="range-label" for="urbanRange"><span>Urbanization</span><span class="range-value" id="urbanValue">55%</span></label><input id="urbanRange" type="range" min="0" max="100" value="55"></div>
-            <div class="field"><label class="range-label" for="roadRange"><span>Road density</span><span class="range-value" id="roadValue">55%</span></label><input id="roadRange" type="range" min="0" max="100" value="55"></div>
+            <div class="field"><label class="range-label" for="urbanRange"><span>Urbanization</span><span class="range-value" id="urbanValue">50%</span></label><input id="urbanRange" type="range" min="0" max="100" value="50"></div>
+            <div class="field"><label class="range-label" for="roadRange"><span>Road density</span><span class="range-value" id="roadValue">48%</span></label><input id="roadRange" type="range" min="0" max="100" value="48"></div>
             <div class="field"><label class="range-label" for="riparianRange"><span>Riparian protection</span><span class="range-value" id="riparianValue">50%</span></label><input id="riparianRange" type="range" min="0" max="100" value="50"></div>
             <div class="field"><label class="range-label" for="nativeRange"><span>Native landscaping</span><span class="range-value" id="nativeValue">45%</span></label><input id="nativeRange" type="range" min="0" max="100" value="45"></div>
             <div class="field"><label class="range-label" for="restorationRange"><span>Prairie restoration</span><span class="range-value" id="restorationValue">40%</span></label><input id="restorationRange" type="range" min="0" max="100" value="40"></div>
@@ -688,41 +743,46 @@
           </section>
 
           <section class="side-section">
-            <div class="side-title-row"><h2>Live landscape</h2><span class="time-label">land cells</span></div>
+            <div class="side-title-row"><h2>Live landscape</h2><span class="time-label">key indicators</span></div>
             <div class="stat-grid">
               <div class="stat"><span>Native prairie</span><strong id="prairieStat">0%</strong></div>
-              <div class="stat"><span>Woody cover</span><strong id="woodyStat">0%</strong></div>
               <div class="stat"><span>Impervious surface</span><strong id="imperviousStat">0%</strong></div>
-              <div class="stat"><span>Invasive cover</span><strong id="invasiveStat">0%</strong></div>
               <div class="stat"><span>Riparian habitat intact</span><strong id="riparianStat">0%</strong></div>
               <div class="stat"><span>Connected habitat</span><strong id="connectedStat">0%</strong></div>
-              <div class="stat"><span>Bare ground</span><strong id="bareStat">0%</strong></div>
-              <div class="stat"><span>Actively burning</span><strong id="burningStat">0%</strong></div>
               <div class="stat wide"><span>Overall ecological condition</span><strong id="conditionStat">0 / 100</strong><div class="bar"><span id="conditionBar"></span></div></div>
             </div>
+            <details class="inline-details">
+              <summary>Show additional landscape indicators</summary>
+              <div class="stat-grid">
+                <div class="stat"><span>Woody cover</span><strong id="woodyStat">0%</strong></div>
+                <div class="stat"><span>Invasive cover</span><strong id="invasiveStat">0%</strong></div>
+                <div class="stat"><span>Bare ground</span><strong id="bareStat">0%</strong></div>
+                <div class="stat"><span>Actively burning</span><strong id="burningStat">0%</strong></div>
+              </div>
+            </details>
           </section>
 
-          <section class="side-section">
-            <div class="side-title-row"><h2>Ecosystem services</h2><span class="time-label">0–100</span></div>
-            <div class="service-list">
-              <div class="service-row"><span>Water infiltration</span><span class="score-badge" id="serviceInfiltration">0</span></div>
-              <div class="service-row"><span>Flood resilience</span><span class="score-badge" id="serviceFlood">0</span></div>
-              <div class="service-row"><span>Pollinator habitat</span><span class="score-badge" id="servicePollinator">0</span></div>
-              <div class="service-row"><span>Soil health</span><span class="score-badge" id="serviceSoil">0</span></div>
-              <div class="service-row"><span>Carbon storage</span><span class="score-badge" id="serviceCarbon">0</span></div>
+          <details class="side-section side-details">
+            <summary><span>More ecological indicators</span></summary>
+            <div class="details-body">
+              <h3 class="subheading">Ecosystem services · 0–100</h3>
+              <div class="service-list">
+                <div class="service-row"><span>Water infiltration</span><span class="score-badge" id="serviceInfiltration">0</span></div>
+                <div class="service-row"><span>Flood resilience</span><span class="score-badge" id="serviceFlood">0</span></div>
+                <div class="service-row"><span>Pollinator habitat</span><span class="score-badge" id="servicePollinator">0</span></div>
+                <div class="service-row"><span>Soil health</span><span class="score-badge" id="serviceSoil">0</span></div>
+                <div class="service-row"><span>Carbon storage</span><span class="score-badge" id="serviceCarbon">0</span></div>
+              </div>
+              <h3 class="subheading">Wildlife response · habitat + active processes</h3>
+              <div class="species-list">
+                <div class="species-row"><span class="species-icon">🐦</span><span>Grassland birds</span><span class="score-badge" id="speciesBirds">0</span></div>
+                <div class="species-row"><span class="species-icon">🐝</span><span>Native bees</span><span class="score-badge" id="speciesBees">0</span></div>
+                <div class="species-row"><span class="species-icon">🐸</span><span>Amphibians</span><span class="score-badge" id="speciesAmphibians">0</span></div>
+                <div class="species-row"><span class="species-icon">🦇</span><span>Bats</span><span class="score-badge" id="speciesBats">0</span></div>
+                <div class="species-row"><span class="species-icon">🐍</span><span>Reptiles</span><span class="score-badge" id="speciesReptiles">0</span></div>
+              </div>
             </div>
-          </section>
-
-          <section class="side-section">
-            <div class="side-title-row"><h2>Wildlife response</h2><span class="time-label">habitat index</span></div>
-            <div class="species-list">
-              <div class="species-row"><span class="species-icon">🐦</span><span>Grassland birds</span><span class="score-badge" id="speciesBirds">0</span></div>
-              <div class="species-row"><span class="species-icon">🐝</span><span>Native bees</span><span class="score-badge" id="speciesBees">0</span></div>
-              <div class="species-row"><span class="species-icon">🐸</span><span>Amphibians</span><span class="score-badge" id="speciesAmphibians">0</span></div>
-              <div class="species-row"><span class="species-icon">🦇</span><span>Bats</span><span class="score-badge" id="speciesBats">0</span></div>
-              <div class="species-row"><span class="species-icon">🐍</span><span>Reptiles</span><span class="score-badge" id="speciesReptiles">0</span></div>
-            </div>
-          </section>
+          </details>
 
           <section class="side-section">
             <h2>What the landscape is showing</h2>
@@ -749,7 +809,7 @@
         <div class="card-grid">
           <article class="info-card"><h3>Pre-European baseline</h3><p>Connected prairie, spring-fed and rainfall-fed waterways, migratory grazing, lightning fire, and Indigenous land stewardship maintain a shifting prairie–savanna mosaic.</p></article>
           <article class="info-card"><h3>Settlement, 1850–1950</h3><p>Fences, livestock, cropland, rail and road corridors, town growth, and reduced cultural burning begin fragmenting the disturbance system.</p></article>
-          <article class="info-card"><h3>Modern corridor</h3><p>An I-35-inspired transportation spine, subdivisions, commercial areas, turf, stormwater infrastructure, fire suppression, and disturbance-linked invasives reshape the watershed.</p></article>
+          <article class="info-card"><h3>Modern corridor</h3><p>An I-35-inspired transportation spine crosses the rivers at discrete bridge points while subdivisions, commercial areas, turf, stormwater infrastructure, fire suppression, and disturbance-linked invasives reshape the watershed.</p></article>
           <article class="info-card"><h3>Restoration future</h3><p>The built footprint remains, but prescribed fire, riparian protection, native landscaping, green stormwater infrastructure, and connected habitat improve function.</p></article>
           <article class="info-card"><h3>Build your own future</h3><p>Adjust urbanization and road density alongside restoration, native landscaping, riparian protection, and green infrastructure to test tradeoffs.</p></article>
           <article class="info-card"><h3>Compare eras</h3><p>Use the comparison window to place the ecological baseline beside the active era and compare land cover, connectivity, water function, and ecological condition.</p></article>
@@ -792,7 +852,7 @@
       <section class="section-block" aria-labelledby="limits-heading">
         <h2 class="section-heading" id="limits-heading">Model scope and limitations</h2>
         <p class="section-intro">This explorer is designed to teach relationships, not predict a parcel, flood, species population, fire, or historical condition.</p>
-        <div class="notice"><strong>Important:</strong> The landscape is a conceptual, regionally inspired model. Locations, dates, rates, species responses, fire behavior, hydrology, and urban patterns are simplified. The wildlife values are habitat indexes—not population estimates. Do not use this tool for engineering, regulatory, emergency, archaeological, or land-management decisions without site-specific professional data.</div>
+        <div class="notice"><strong>Important:</strong> The landscape is a conceptual, regionally inspired model. Locations, dates, rates, species responses, fire behavior, hydrology, and urban patterns are simplified. Wildlife values combine visible habitat with the ecological processes maintaining that habitat; they are relative habitat indexes, not population estimates. Invasive pressure creates a small early risk signal, while expanding invasive cover causes larger declines. Do not use this tool for engineering, regulatory, emergency, archaeological, or land-management decisions without site-specific professional data.</div>
       </section>
 
       <section class="section-block" aria-labelledby="sources-heading">
@@ -804,11 +864,14 @@
           <li><a href="https://www.springlakearchaeology.txst.edu/archaeology-of-spring-lake/location.html" target="_blank" rel="noopener">Texas State University — Spring Lake and San Marcos Springs</a><span>Spring Lake, artesian springs, Edwards Aquifer, and Balcones Escarpment context.</span></li>
           <li><a href="https://www.cityofkyle.gov/living-here/parks-and-recreation/parks-and-trails/" target="_blank" rel="noopener">City of Kyle — Parks and trails</a><span>Plum Creek trail spine, neighborhood connections, parks, and open-space context.</span></li>
           <li><a href="https://www.cityofkyle.gov/living-here/parks-and-recreation/conservation/" target="_blank" rel="noopener">City of Kyle — Conservation</a><span>Local science-based habitat, soil, water, native-plant, and resilience work.</span></li>
+          <li><a href="https://www.usgs.gov/publications/should-heterogeneity-be-basis-conservation-grassland-bird-response-fire-and-grazing" target="_blank" rel="noopener">USGS — Grassland bird response to fire and grazing</a><span>Evidence for a shifting disturbance mosaic supporting varied grassland-bird habitat.</span></li>
+          <li><a href="https://doi.org/10.1016/j.gecco.2022.e02352" target="_blank" rel="noopener">Global Ecology and Conservation — Invasive grass, litter, bees, and plant diversity</a><span>Evidence that invasive-grass dominance and litter accumulation can simplify forb and bee communities.</span></li>
+          <li><a href="https://pubmed.ncbi.nlm.nih.gov/25065640/" target="_blank" rel="noopener">Conservation Biology — Effects of invasive plants on arthropods</a><span>A broad synthesis showing frequent declines in arthropod abundance and richness following plant invasion.</span></li>
         </ul>
       </section>
 
       <footer>
-        Central Texas Landscape Explorer · A conceptual educational model created for Glass Root Garden. Designed to remain functional as a static GitHub Pages site with no external JavaScript dependencies.
+        Central Texas Landscape Explorer 1.2 · A conceptual educational model created for Glass Root Garden. Designed to remain functional as a static GitHub Pages site with no external JavaScript dependencies.
       </footer>
     </div>
   </main>
@@ -868,19 +931,19 @@
       },
       modern: {
         title: "Modern San Marcos–Kyle development corridor", short: "Modern", year: "Today",
-        urban: 68, roads: 72, agriculture: 28, riparian: 35, native: 18, restoration: 5, green: 18, connectivity: 5,
+        urban: 60, roads: 58, agriculture: 28, riparian: 35, native: 18, restoration: 5, green: 18, connectivity: 5,
         grazing: false, lightning: true, managedFire: false, suppression: true, invasives: true,
         grazingType: "none", agentCount: 0, fireRate: 0.0001, lightningRate: 0.00035, suppressionFactor: 0.90,
       },
       restoration: {
         title: "Restoration-focused future", short: "Restoration", year: "Possible future",
-        urban: 68, roads: 72, agriculture: 18, riparian: 82, native: 82, restoration: 78, green: 84, connectivity: 92,
+        urban: 60, roads: 58, agriculture: 18, riparian: 82, native: 82, restoration: 78, green: 84, connectivity: 92,
         grazing: false, lightning: true, managedFire: true, suppression: true, invasives: true,
         grazingType: "none", agentCount: 0, fireRate: 0.0012, lightningRate: 0.00035, suppressionFactor: 0.48,
       },
       custom: {
         title: "Build your own future", short: "Custom", year: "Your scenario",
-        urban: 55, roads: 55, agriculture: 20, riparian: 50, native: 45, restoration: 40, green: 45, connectivity: 10,
+        urban: 50, roads: 48, agriculture: 20, riparian: 50, native: 45, restoration: 40, green: 45, connectivity: 10,
         grazing: false, lightning: true, managedFire: true, suppression: true, invasives: true,
         grazingType: "none", agentCount: 0, fireRate: 0.0008, lightningRate: 0.00035, suppressionFactor: 0.62,
       },
@@ -890,7 +953,7 @@
       prairieBare: "#bda772", prairieSparse: "#acb86a", prairieGrass: "#718d4f", shrub: "#496d3d",
       sapling: "#315a36", tree: "#1d4a2d", riparianTree: "#174d3e", rock: "#a59d88", water: "#4d9db6",
       waterDeep: "#29768e", spring: "#78d2dc", wetland: "#649b78", invasive: "#934f70", turf: "#75aa69",
-      crop: "#c5a85a", road: "#56595b", urban: "#b9b4aa", roof: "#8d8276", park: "#7fa46e",
+      crop: "#c5a85a", road: "#626668", urban: "#c7c3ba", roof: "#9d958b", park: "#7fa46e",
       stormwater: "#5d93a3", fire: "#ec6a2c", ember: "#ffd36a", restored: "#5f9c62",
       agentBison: "#3a2418", agentCattle: "#f1ead9", fence: "#76644b", highway: "#383b3d",
     });
@@ -978,8 +1041,8 @@
     }
 
     const WATERWAYS = Object.freeze({
-      blanco: [[-4, 23], [12, 25], [28, 28], [44, 32], [57, 39], [66, 52], [68, 68], [70, 84], [71, 94]],
-      sanMarcos: [[54, 77], [56, 82], [60, 87], [66, 91], [71, 94], [83, 101], [101, 106], [124, 110]],
+      blanco: [[-4, 23], [12, 25], [28, 28], [44, 32], [57, 37], [67, 43], [76, 48], [82, 58], [86, 71], [90, 84], [95, 98]],
+      sanMarcos: [[54, 77], [56, 82], [61, 87], [69, 91], [80, 94], [90, 97], [95, 98], [108, 104], [124, 108]],
       plum: [[72, -4], [76, 10], [82, 22], [89, 34], [96, 46], [107, 57], [124, 64]],
       purgatory: [[28, 98], [36, 93], [45, 90], [54, 88], [60, 87]],
       sessom: [[39, 66], [45, 69], [50, 73], [54, 77]],
@@ -1079,7 +1142,7 @@
       return baseGrid.map(row => row.map(cell => ({ ...cell, onFire: 0, fireAge: 0, saplingAge: 0, land: LAND.NATURAL, restoration: 0, urbanPressure: 0, edgePressure: 0, runoff: 0, infiltration: 0, seedRisk: 0, invasiveRisk: 0, protected: false, corridor: false, crossing: false, bridge: false, roadDistance: 99, developmentScore: 0 })));
     }
 
-    function roadCenterX(y) { return 69 + Math.sin(y / 24) * 1.8 + (y > 72 ? 1.5 : 0); }
+    function roadCenterX(y) { return 71 + Math.sin((y - 8) / 28) * 1.35 + (y > 78 ? 0.8 : 0); }
     function roadDistance(x, y) { return Math.abs(x - roadCenterX(y)); }
 
     function pointInRoundedRect(x, y, cx, cy, rx, ry, softness = 0) {
@@ -1170,7 +1233,7 @@
           const crossRoadA = Math.abs(y - 28) < .75 && x > 47 && roadScale > .3;
           const crossRoadB = Math.abs(y - 75) < .8 && x > 39 && roadScale > .3;
           const crossRoadC = Math.abs(y - (51 + Math.sin(x / 9) * 1.3)) < .6 && x > 55 && roadScale > .55;
-          if ((crossRoadA || crossRoadB || crossRoadC) && fixedNoise < roadScale) { c.land = LAND.ROAD; c.veg = VEG.BARE; continue; }
+          if ((crossRoadA || crossRoadB || crossRoadC) && fixedNoise < roadScale * .58) { c.land = LAND.ROAD; c.veg = VEG.BARE; continue; }
 
           let isUrban = false;
           let urbanIntensity = 0;
@@ -1206,7 +1269,7 @@
               c.veg = c.land === LAND.RESTORED ? (fixedNoise < .7 ? VEG.GRASS : VEG.SHRUB) : VEG.TURF;
               c.restoration = c.land === LAND.RESTORED ? .8 : 0;
             } else {
-              c.land = fixedNoise < .14 + urbanIntensity * .22 ? LAND.ROAD : LAND.URBAN;
+              c.land = fixedNoise < .08 + urbanIntensity * .12 ? LAND.ROAD : LAND.URBAN;
               c.veg = VEG.BARE;
               c.urbanPressure = clamp(.5 + urbanIntensity, 0, 1);
             }
@@ -1398,7 +1461,7 @@
       document.querySelectorAll(".era-button").forEach(btn => btn.setAttribute("aria-selected", String(btn.dataset.era === era)));
       els.timeline.value = String(ERA_ORDER.indexOf(era));
       els.customControls.hidden = era !== "custom";
-      els.mapBadge.textContent = `${config.title} · regionally inspired, not a literal map`;
+      els.mapBadge.textContent = `${config.short} view · conceptual regional model`;
       els.eraShortLabel.textContent = config.short;
       resetScenario(false);
       if (announce) showToast(`${config.title} loaded.`);
@@ -1674,7 +1737,7 @@
       return result;
     }
 
-    function calculateStats(targetGrid) {
+    function calculateStats(targetGrid, scoringConfig = config) {
       let land = 0, prairie = 0, woody = 0, impervious = 0, invasive = 0, bare = 0, burning = 0;
       let riparianTotal = 0, riparianIntact = 0, infiltrationSum = 0, floodSum = 0, pollinatorSum = 0, soilSum = 0, carbonSum = 0;
       let waterEdge = 0, nativeDiversity = new Set();
@@ -1699,27 +1762,65 @@
         pollinatorSum += clamp(pollinatorCell + c.restoration * 8 - c.edgePressure * 18, 0, 100);
         const covered = c.veg !== VEG.BARE && c.land !== LAND.ROAD && c.land !== LAND.URBAN;
         soilSum += clamp((covered ? 66 : 18) + c.infiltration * 25 + c.restoration * 15 - c.edgePressure * 12, 0, 100);
-        const carbonCell = c.veg === VEG.TREE ? 94 : c.veg === VEG.SAPLING ? 70 : c.veg === VEG.SHRUB ? 55 : c.veg === VEG.GRASS ? 58 : c.veg === VEG.SPARSE ? 35 : c.veg === VEG.CROP ? 24 : c.veg === VEG.TURF ? 26 : 8;
+        const carbonCell = c.veg === VEG.TREE ? 94 : c.veg === VEG.SAPLING ? 70 : c.veg === VEG.SHRUB ? 55 : c.veg === VEG.GRASS ? 58 : c.veg === VEG.SPARSE ? 35 : c.veg === VEG.CROP ? 24 : c.veg === VEG.TURF ? 26 : c.veg === VEG.INVASIVE ? 34 : 8;
         carbonSum += carbonCell;
         if (habitatEligible(c)) nativeDiversity.add(`${c.terrain}-${c.veg}`);
         if (c.terrain === TERRAIN.RIPARIAN || c.terrain === TERRAIN.WETLAND) waterEdge++;
       }
+
       const connectivity = calculateConnectivity(targetGrid).score;
       const s = emptyStats();
       s.prairie = pct(prairie,land); s.woody = pct(woody,land); s.impervious = pct(impervious,land); s.invasive = pct(invasive,land); s.bare = pct(bare,land); s.burning = pct(burning,land);
       s.riparian = pct(riparianIntact,riparianTotal); s.connected = connectivity;
-      s.services.infiltration = Math.round(infiltrationSum/land);
-      s.services.flood = Math.round(floodSum/land);
-      s.services.pollinator = Math.round(pollinatorSum/land);
-      s.services.soil = Math.round(soilSum/land);
-      s.services.carbon = Math.round(carbonSum/land);
+
+      // Process integrity intentionally affects habitat indexes before the vegetation visibly collapses.
+      // This represents the loss of the shifting fire–grazing mosaic, not an instant population estimate.
+      const fireFunction = scoringConfig.managedFire ? 1 : scoringConfig.lightning ? (scoringConfig.suppression ? 0.12 : 0.62) : 0;
+      const grazingFunction = scoringConfig.grazing ? (scoringConfig.grazingType === "bison" ? 1 : 0.65) : 0;
+      const restorationSupport = clamp((scoringConfig.restoration || 0) / 100, 0, 1);
+      const nativeSupport = clamp((scoringConfig.native || 0) / 100, 0, 1);
+      const grasslandProcess = clamp(fireFunction * 0.56 + grazingFunction * 0.44 + restorationSupport * 0.35, 0, 1);
+      const floralProcess = clamp(fireFunction * 0.35 + grazingFunction * 0.12 + nativeSupport * 0.33 + restorationSupport * 0.25, 0, 1);
+
+      // Turning on invasive pressure creates a small risk penalty immediately. Actual invasive cover
+      // then produces the much larger decline as native plants, structure, and food-web support are displaced.
+      const invasiveThreat = clamp(s.invasive * 0.85 + (scoringConfig.invasives ? 4 : 0), 0, 55);
+
+      s.services.infiltration = clamp(Math.round(infiltrationSum/land - s.invasive * 0.04), 0, 100);
+      s.services.flood = clamp(Math.round(floodSum/land - s.invasive * 0.08 - (scoringConfig.invasives ? 0.5 : 0)), 0, 100);
+      s.services.pollinator = clamp(Math.round(pollinatorSum/land - s.invasive * 0.28 - (scoringConfig.invasives ? 2 : 0) - (1 - floralProcess) * 6), 0, 100);
+      s.services.soil = clamp(Math.round(soilSum/land - s.invasive * 0.12 - (scoringConfig.invasives ? 1 : 0)), 0, 100);
+      // Carbon is not forced downward simply because a plant is invasive; dense nonnative vegetation can still store carbon.
+      // The model instead penalizes native biodiversity and food-web function more strongly.
+      s.services.carbon = clamp(Math.round(carbonSum/land), 0, 100);
+
       const diversityBonus = clamp(nativeDiversity.size * 2.2, 0, 20);
-      s.condition = clamp(Math.round(s.prairie * .22 + s.riparian * .17 + s.connected * .19 + s.services.infiltration * .13 + s.services.pollinator * .12 + diversityBonus - s.impervious * .28 - s.invasive * .35),0,100);
-      s.species.birds = clamp(Math.round(s.prairie * .78 + s.connected * .26 - s.impervious * .35 - s.invasive * .22),0,100);
-      s.species.bees = clamp(Math.round(s.services.pollinator * .72 + s.connected * .18 - s.impervious * .2),0,100);
-      s.species.amphibians = clamp(Math.round(s.riparian * .46 + s.services.flood * .31 + pct(waterEdge,land) * 1.2 - s.impervious * .18),0,100);
-      s.species.bats = clamp(Math.round(s.riparian * .28 + s.woody * .42 + s.connected * .18 + s.services.pollinator * .16),0,100);
-      s.species.reptiles = clamp(Math.round(s.connected * .38 + s.prairie * .34 + s.woody * .18 - s.impervious * .22),0,100);
+      s.condition = clamp(Math.round(
+        s.prairie * .18 + s.riparian * .16 + s.connected * .18 +
+        s.services.infiltration * .10 + s.services.pollinator * .15 + s.services.soil * .08 +
+        diversityBonus + grasslandProcess * 10 - s.impervious * .25 - invasiveThreat * .50
+      ),0,100);
+
+      s.species.birds = clamp(Math.round(
+        s.prairie * .54 + s.connected * .24 + s.services.pollinator * .12 +
+        grasslandProcess * 18 - s.impervious * .28 - invasiveThreat * .60
+      ),0,100);
+      s.species.bees = clamp(Math.round(
+        s.services.pollinator * .66 + s.connected * .14 + nativeSupport * 10 +
+        floralProcess * 18 - s.impervious * .16 - invasiveThreat * .85
+      ),0,100);
+      s.species.amphibians = clamp(Math.round(
+        s.riparian * .45 + s.services.flood * .28 + pct(waterEdge,land) * 1.0 +
+        s.connected * .08 - s.impervious * .18 - invasiveThreat * .22
+      ),0,100);
+      s.species.bats = clamp(Math.round(
+        s.riparian * .25 + s.woody * .28 + s.connected * .18 +
+        s.services.pollinator * .22 - s.impervious * .10 - invasiveThreat * .38
+      ),0,100);
+      s.species.reptiles = clamp(Math.round(
+        s.connected * .34 + s.prairie * .28 + s.woody * .15 +
+        s.services.soil * .15 - s.impervious * .22 - invasiveThreat * .34
+      ),0,100);
       return s;
     }
 
@@ -1886,11 +1987,10 @@
       targetCtx.font = `700 ${Math.max(8,cell*1.55)}px system-ui`;
       targetCtx.textBaseline = "middle";
       const labels = [
-        [6,18,"Blanco River"],[54,71,"Spring Lake"],[56,83,"San Marcos River"],[88,18,"Plum Creek"],
-        [11,109,"Edwards Plateau uplands"],[90,113,"Blackland Prairie"],
+        [7,18,"Blanco River"],[49,72,"Spring Lake"],[65,86,"San Marcos River"],[89,18,"Plum Creek"],
       ];
-      if (era !== "historic") labels.push([72,8,"Kyle"],[72,69,"San Marcos"]);
-      if (["modern","restoration","custom"].includes(era)) labels.push([64,45,"I-35 corridor"]);
+      if (era !== "historic") labels.push([74,9,"Kyle"],[74,70,"San Marcos"]);
+      if (["modern","restoration","custom"].includes(era)) labels.push([64,55,"I-35 corridor"]);
       for (const [x,y,text] of labels) {
         const width = targetCtx.measureText(text).width;
         targetCtx.fillStyle = "rgba(255,253,247,.78)"; targetCtx.fillRect(x*cell-3,y*cell-cell,width+6,cell*2);
@@ -1979,7 +2079,7 @@
       if(config.suppression)drivers.push(["Fire suppression","More shrubs and tree seedlings survive long enough to mature, especially on fragmented land where fire cannot move freely."]);
       if(config.grazing)drivers.push([config.grazingType==="bison"?"Migratory grazing":"Livestock grazing","Grazers shorten grass, create bare patches, redistribute disturbance, and sometimes trample young woody plants."]);
       if(config.managedFire)drivers.push([era==="historic"?"Indigenous fire stewardship":"Prescribed fire","Planned burning reconnects a process that limits woody encroachment and renews prairie vegetation when conditions and management are appropriate."]);
-      if(config.invasives)drivers.push(["Disturbance-linked invasive plants","Road edges, altered waterways, soil disturbance, and fragmented habitats increase opportunities for invasive establishment and spread."]);
+      if(config.invasives)drivers.push(["Disturbance-linked invasive plants","Road edges, altered waterways, soil disturbance, and fragmented habitats increase establishment risk. Wildlife and ecosystem indexes decline slightly when that pressure begins, then more strongly as invasive cover displaces native plants and simplifies food-web support."]);
       if(stats.impervious>3)drivers.push(["Urbanization and roads","Impervious surfaces remove habitat, concentrate runoff, create heat and edge effects, and divide the remaining native network."]);
       if(config.restoration>20)drivers.push(["Restoration and green infrastructure","Native plantings, protected riparian buffers, connected corridors, and stormwater features recover function without removing the entire built footprint."]);
       if(!config.lightning&&!config.managedFire)drivers.push(["Fire removed","When both lightning and managed fire are absent, woody plants escape a major source of mortality and expand into former prairie."]);
@@ -1990,7 +2090,7 @@
 
     function renderCompare() {
       const historicConfig=cloneConfig(ERA_CONFIG.historic); const rng=mulberry32(selectedSeed+1); const historicGrid=copyBaseGrid(); applyScenario(historicGrid,historicConfig,"historic",rng);
-      const historicStats=calculateStats(historicGrid); const hctx=els.historicCompareCanvas.getContext("2d",{alpha:false});
+      const historicStats=calculateStats(historicGrid, historicConfig); const hctx=els.historicCompareCanvas.getContext("2d",{alpha:false});
       const oldOverlay=overlay, oldEra=era; overlay="none"; render(hctx,historicGrid,4,false,false); overlay=oldOverlay;
       const cctx=els.currentCompareCanvas.getContext("2d",{alpha:false}); render(cctx,grid,4,false,false);
       els.currentCompareHeading.textContent=config.title; els.currentCompareColumn.textContent=config.short;
