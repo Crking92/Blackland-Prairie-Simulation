@@ -1,949 +1,2078 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
-  <meta http-equiv="Pragma" content="no-cache">
-  <meta http-equiv="Expires" content="0">
-  <title>Blackland Prairie–Balcones Transition Simulation</title>
-  <meta name="description" content="An interactive educational model of how fire, Indigenous burning, bison grazing, hydrology, and succession shaped the Central Texas Blackland Prairie–Balcones transition zone.">
-  
-  <!-- Load Tailwind CSS -->
-  <script src="https://cdn.tailwindcss.com"></script>
-  
-  <!-- Load React -->
-  <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
-  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
-  
-  <!-- Load Babel to compile JSX in the browser -->
-  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-</head>
-<body class="bg-slate-100">
-  <div id="root"></div>
-  <noscript>This interactive simulation requires JavaScript.</noscript>
-
-  <script type="text/babel">
-    const { useState, useEffect, useRef, useCallback } = React;
-
-    // ============================================================
-    // BLACKLAND PRAIRIE–BALCONES TRANSITION SIMULATION
-    // ============================================================
-
-    const GRID_SIZE = 120;
-    const CELL_SIZE = 6;
-    const CANVAS_SIZE = GRID_SIZE * CELL_SIZE;
-
-    const BISON_COUNT = 90;
-    const HERD_COUNT = 4;
-
-    const ECOLOGICAL_STEP_MS = 70;
-
-    const TYPE_PRAIRIE = 0;
-    const TYPE_WATER = 1;
-    const TYPE_ROCK = 2;
-    const TYPE_WETLAND = 3;
-    const TYPE_RIPARIAN = 4;
-
-    const VEG_BARE = 0;
-    const VEG_SPARSE_GRASS = 1;
-    const VEG_MATURE_GRASS = 2;
-    const VEG_SHRUB = 3;
-    const VEG_SAPLING = 4;
-    const VEG_TREE = 5;
-
-    const GRASS_REGROWTH_CHANCE = 0.03;
-    const GRASS_MATURATION_CHANCE = 0.012;
-    const SHRUB_LOCAL_SPREAD_CHANCE = 0.006;
-    const SHRUB_BIRD_DROP_CHANCE = 0.0003;
-    const TREE_SEED_CHANCE = 0.004;
-    const SAPLING_MATURATION_TIME = 200;
-    const LIGHTNING_EVENT_CHANCE = 0.001;
-    const INDIGENOUS_BURN_CHANCE = 0.003;
-    const FIRE_DURATION = 4;
-
-    const HERD_COHESION = 0.012;
-    const HERD_ALIGNMENT = 0.035;
-    const BISON_SEPARATION = 0.045;
-    const HERD_WANDER_STRENGTH = 0.018;
-
-    const MAX_BISON_SPEED = 0.42;
-    const MIN_BISON_SPEED = 0.08;
-
-    const FIRE_IGNITION_CHANCE = {
-      [VEG_BARE]: 0,
-      [VEG_SPARSE_GRASS]: 0.06,
-      [VEG_MATURE_GRASS]: 0.65,
-      [VEG_SHRUB]: 0.3,
-      [VEG_SAPLING]: 0.2,
-      [VEG_TREE]: 0.06,
-    };
-
-    const CARDINAL_NEIGHBORS = [
-      [1, 0], [-1, 0], [0, 1], [0, -1],
-    ];
-
-    const ALL_NEIGHBORS = [
-      [-1, -1], [0, -1], [1, -1], [-1, 0], [1, 0], [-1, 1], [0, 1], [1, 1],
-    ];
-
-    const clamp = (value, minimum, maximum) => Math.max(minimum, Math.min(maximum, value));
-    const isInsideGrid = (x, y) => x >= 0 && x < GRID_SIZE && y >= 0 && y < GRID_SIZE;
-
-    const createCell = (x, y, type, vegetation) => ({
-      x, y, type, veg: vegetation, saplingAge: 0, onFire: 0, fireIntensity: 0,
-    });
-
-    const getTerrainFireMultiplier = (terrain) => {
-      if (terrain === TYPE_WATER) return 0;
-      if (terrain === TYPE_WETLAND) return 0.05;
-      if (terrain === TYPE_RIPARIAN) return 0.02;
-      if (terrain === TYPE_ROCK) return 0.1;
-      return 1;
-    };
-
-    const getTreeTerrainMultiplier = (terrain) => {
-      if (terrain === TYPE_RIPARIAN) return 1.7;
-      if (terrain === TYPE_ROCK) return 1.15;
-      if (terrain === TYPE_WETLAND) return 0.12;
-      if (terrain === TYPE_PRAIRIE) return 0.5;
-      return 0;
-    };
-
-    const getGrassCompetitionMultiplier = (vegetation) => {
-      if (vegetation === VEG_BARE) return 1;
-      if (vegetation === VEG_SPARSE_GRASS) return 0.42;
-      if (vegetation === VEG_MATURE_GRASS) return 0.08;
-      if (vegetation === VEG_SHRUB) return 0.22;
-      return 0;
-    };
-
-    function App() {
-      const canvasRef = useRef(null);
-      const gridRef = useRef([]);
-      const bisonRef = useRef([]);
-      const herdsRef = useRef([]);
-      const animationFrameRef = useRef(null);
-      const previousFrameTimeRef = useRef(0);
-      const accumulatedTimeRef = useRef(0);
-      const tickRef = useRef(0);
-
-      const [isRunning, setIsRunning] = useState(true);
-      const [ticks, setTicks] = useState(0);
-      const [speed, setSpeed] = useState(1);
-      const [stats, setStats] = useState({
-        grass: 0,
-        woody: 0,
-        bare: 0,
-        burning: 0,
-        shrubs: 0,
-        saplings: 0,
-        trees: 0,
-      });
-
-      const [bisonActive, setBisonActive] = useState(true);
-      const [lightningActive, setLightningActive] = useState(true);
-      const [indigenousBurnsActive, setIndigenousBurnsActive] = useState(true);
-
-      const runningRef = useRef(true);
-      const speedRef = useRef(1);
-      const bisonActiveRef = useRef(true);
-      const lightningActiveRef = useRef(true);
-      const indigenousBurnsActiveRef = useRef(true);
-
-      useEffect(() => { runningRef.current = isRunning; }, [isRunning]);
-      useEffect(() => { speedRef.current = speed; }, [speed]);
-      useEffect(() => { bisonActiveRef.current = bisonActive; }, [bisonActive]);
-      useEffect(() => { lightningActiveRef.current = lightningActive; }, [lightningActive]);
-      useEffect(() => { indigenousBurnsActiveRef.current = indigenousBurnsActive; }, [indigenousBurnsActive]);
-
-      const calculateStats = useCallback((grid) => {
-        if (!grid.length) return;
-
-        let landCells = 0;
-        let grass = 0;
-        let woody = 0;
-        let bare = 0;
-        let burning = 0;
-        let shrubs = 0;
-        let saplings = 0;
-        let trees = 0;
-
-        for (const row of grid) {
-          for (const cell of row) {
-            if (cell.type === TYPE_WATER) continue;
-            landCells += 1;
-            if (cell.onFire > 0) burning += 1;
-            if (cell.veg === VEG_BARE) bare += 1;
-            if (cell.veg === VEG_SPARSE_GRASS || cell.veg === VEG_MATURE_GRASS) grass += 1;
-            if (cell.veg === VEG_SHRUB) shrubs += 1;
-            if (cell.veg === VEG_SAPLING) saplings += 1;
-            if (cell.veg === VEG_TREE) trees += 1;
-          }
-        }
-
-        woody = shrubs + saplings + trees;
-        const pct = (value) => landCells ? Number(((value / landCells) * 100).toFixed(1)) : 0;
-
-        setStats({
-          grass: pct(grass),
-          woody: pct(woody),
-          bare: pct(bare),
-          burning: pct(burning),
-          shrubs: pct(shrubs),
-          saplings: pct(saplings),
-          trees: pct(trees),
-        });
-      }, []);
-
-      const getLandscapeMessage = () => {
-        if (ticks < 40) return "The starting landscape is mostly prairie with woody cover concentrated in riparian corridors, rocky slopes, and scattered motts.";
-        if (stats.woody >= 45) return "Woody plants now occupy a large share of the landscape. Compare this run with fire and grazing restored.";
-        if (stats.woody >= 28) return "Woody cover is expanding beyond protected corridors and motts, indicating increasing encroachment.";
-        if (stats.grass >= 60 && stats.woody < 25) return "Grassland remains dominant while woody vegetation persists mainly in protected landscape positions.";
-        return "The landscape is shifting. Watch how disturbances and terrain redistribute grass, bare soil, shrubs, and trees.";
-      };
-
-      const drawCanvas = useCallback(() => {
-        const canvas = canvasRef.current;
-        const grid = gridRef.current;
-        if (!canvas || !grid.length) return;
-        const context = canvas.getContext("2d");
-        if (!context) return;
-
-        context.clearRect(0, 0, canvas.width, canvas.height);
-
-        for (let y = 0; y < GRID_SIZE; y += 1) {
-          for (let x = 0; x < GRID_SIZE; x += 1) {
-            const cell = grid[y][x];
-            let color = "#d2b48c";
-
-            if (cell.type === TYPE_WATER) {
-              color = (x + y) % 5 === 0 ? "#0277bd" : "#0288d1";
-            } else if (cell.type === TYPE_ROCK) {
-              color = "#90a4ae";
-            } else if (cell.type === TYPE_WETLAND) {
-              color = "#9aaa83";
-            } else if (cell.type === TYPE_RIPARIAN) {
-              color = "#5d4037";
-            }
-
-            if (cell.veg === VEG_SPARSE_GRASS) {
-              color = cell.type === TYPE_WETLAND ? "#aed581" : "#c5e1a5";
-            } else if (cell.veg === VEG_MATURE_GRASS) {
-              color = "#7cb342";
-            } else if (cell.veg === VEG_SHRUB) {
-              color = "#827717";
-            } else if (cell.veg === VEG_SAPLING) {
-              color = "#558b2f";
-            } else if (cell.veg === VEG_TREE) {
-              if (cell.type === TYPE_RIPARIAN) {
-                color = "#004d40";
-              } else if (cell.type === TYPE_ROCK) {
-                color = "#1b5e20";
-              } else {
-                color = "#2e7d32";
-              }
-            }
-
-            if (cell.onFire > 0) {
-              color = cell.onFire > 2 ? "#ff5722" : "#ffc107";
-            }
-
-            context.fillStyle = color;
-            context.fillRect(x * CELL_SIZE, y * CELL_SIZE, CELL_SIZE, CELL_SIZE);
-          }
-        }
-
-        if (bisonActiveRef.current) {
-          context.fillStyle = "#4e342e";
-          for (const bison of bisonRef.current) {
-            context.beginPath();
-            context.arc(bison.x * CELL_SIZE, bison.y * CELL_SIZE, CELL_SIZE / 1.45, 0, Math.PI * 2);
-            context.fill();
-          }
-        }
-      }, []);
-
-      const initializeSimulation = useCallback(() => {
-        const newGrid = [];
-        const newBison = [];
-        const newHerds = [];
-
-        const verticalRiverCenters = [];
-        const verticalRiverWidths = [];
-
-        for (let y = 0; y < GRID_SIZE; y += 1) {
-          const broadCurve = Math.sin(y / 15) * 3.25;
-          const smallerCurve = Math.sin(y / 5.5) * 1.1;
-          verticalRiverCenters.push(105 + broadCurve + smallerCurve);
-          verticalRiverWidths.push(2.6 + ((Math.sin(y / 11) + 1) / 2) * 1.15);
-        }
-
-        const tributaryCenters = [];
-        const tributaryWidths = [];
-        const mergeY = Math.floor(GRID_SIZE * 0.6);
-        const tributaryStartingX = 1;
-        const tributaryMergeX = verticalRiverCenters[mergeY];
-
-        for (let y = 0; y < GRID_SIZE; y += 1) {
-          if (y <= mergeY) {
-            const progress = y / mergeY;
-            const smoothProgress = progress * progress * (3 - 2 * progress);
-            const meanderFade = 1 - progress * progress;
-            const meander = Math.sin(y / 7) * 3.5 * meanderFade + Math.sin(y / 3.7) * 0.8 * meanderFade;
-            const center = tributaryStartingX + (tributaryMergeX - tributaryStartingX) * smoothProgress + meander;
-            tributaryCenters.push(center);
-            tributaryWidths.push(1.8 + progress * 0.9 + Math.sin(y / 9) * 0.2);
-          } else {
-            tributaryCenters.push(null);
-            tributaryWidths.push(0);
-          }
-        }
-
-        const rockPatches = [];
-        for (let i = 0; i < 38; i += 1) {
-          const verticalBias = Math.pow(Math.random(), 1.7);
-          rockPatches.push({
-            x: Math.floor(Math.random() * 43),
-            y: Math.floor(GRID_SIZE - 1 - verticalBias * 42),
-            radius: 3 + Math.random() * 6.5,
-          });
-        }
-        for (let i = 0; i < 6; i += 1) {
-          rockPatches.push({
-            x: Math.floor(Math.random() * GRID_SIZE),
-            y: Math.floor(Math.random() * GRID_SIZE),
-            radius: 1.7 + Math.random() * 2.8,
-          });
-        }
-
-        const gilgaiPatches = [];
-        for (let i = 0; i < 20; i += 1) {
-          gilgaiPatches.push({
-            x: 30 + Math.floor(Math.random() * 73),
-            y: Math.floor(Math.random() * GRID_SIZE),
-            radius: 1 + Math.random() * 1.7,
-          });
-        }
-
-        const prairieMotts = [];
-        for (let i = 0; i < 6; i += 1) {
-          prairieMotts.push({
-            x: 25 + Math.floor(Math.random() * 72),
-            y: 8 + Math.floor(Math.random() * 102),
-            radius: 1.7 + Math.random() * 2.2,
-          });
-        }
-
-        for (let y = 0; y < GRID_SIZE; y += 1) {
-          const row = [];
-          for (let x = 0; x < GRID_SIZE; x += 1) {
-            let terrain = TYPE_PRAIRIE;
-            let vegetation = VEG_MATURE_GRASS;
-            let water = false;
-            let riparian = false;
-
-            const mainRiverDistance = Math.abs(x - verticalRiverCenters[y]);
-            const mainChannelEdge = verticalRiverWidths[y];
-            const mainRiparianEdge = mainChannelEdge + 5;
-
-            if (mainRiverDistance <= mainChannelEdge) {
-              water = true;
-            } else if (mainRiverDistance <= mainRiparianEdge) {
-              riparian = true;
-            }
-
-            if (tributaryCenters[y] !== null) {
-              const tributaryDistance = Math.abs(x - tributaryCenters[y]);
-              const tributaryChannelEdge = tributaryWidths[y];
-              const tributaryRiparianEdge = tributaryChannelEdge + 4;
-              if (tributaryDistance <= tributaryChannelEdge) {
-                water = true;
-              } else if (tributaryDistance <= tributaryRiparianEdge) {
-                riparian = true;
-              }
-            }
-
-            if (water) {
-              terrain = TYPE_WATER;
-              vegetation = VEG_BARE;
-            } else if (riparian) {
-              terrain = TYPE_RIPARIAN;
-              const random = Math.random();
-              if (random < 0.76) {
-                vegetation = VEG_TREE;
-              } else if (random < 0.92) {
-                vegetation = VEG_SHRUB;
-              } else {
-                vegetation = VEG_SPARSE_GRASS;
-              }
-            } else {
-              let rock = false;
-              let gilgai = false;
-              let mott = false;
-
-              for (const patch of rockPatches) {
-                if (Math.hypot(x - patch.x, y - patch.y) < patch.radius) { rock = true; break; }
-              }
-              if (!rock) {
-                for (const patch of gilgaiPatches) {
-                  if (Math.hypot(x - patch.x, y - patch.y) < patch.radius) { gilgai = true; break; }
-                }
-              }
-              if (!rock && !gilgai) {
-                for (const patch of prairieMotts) {
-                  if (Math.hypot(x - patch.x, y - patch.y) < patch.radius) { mott = true; break; }
-                }
-              }
-
-              if (rock) {
-                terrain = TYPE_ROCK;
-                const random = Math.random();
-                if (random < 0.69) vegetation = VEG_TREE;
-                else if (random < 0.84) vegetation = VEG_SHRUB;
-                else vegetation = VEG_SPARSE_GRASS;
-              } else if (gilgai) {
-                terrain = TYPE_WETLAND;
-                vegetation = Math.random() < 0.2 ? VEG_BARE : VEG_SPARSE_GRASS;
-              } else if (mott) {
-                vegetation = Math.random() < 0.82 ? VEG_TREE : VEG_SHRUB;
-              } else {
-                const random = Math.random();
-                if (random < 0.018) vegetation = VEG_SHRUB;
-                else if (random < 0.023) vegetation = VEG_BARE;
-                else if (random < 0.06) vegetation = VEG_SPARSE_GRASS;
-              }
-            }
-            row.push(createCell(x, y, terrain, vegetation));
-          }
-          newGrid.push(row);
-        }
-
-        const herdSizes = [];
-        let remainingBison = BISON_COUNT;
-        for (let herdIndex = 0; herdIndex < HERD_COUNT; herdIndex += 1) {
-          const herdsRemaining = HERD_COUNT - herdIndex;
-          if (herdIndex === HERD_COUNT - 1) {
-            herdSizes.push(remainingBison);
-            break;
-          }
-          const averageSize = remainingBison / herdsRemaining;
-          const proposedSize = Math.round(averageSize + (Math.random() - 0.5) * 8);
-          const minimumRemaining = (herdsRemaining - 1) * 15;
-          const safeSize = clamp(proposedSize, 15, remainingBison - minimumRemaining);
-          herdSizes.push(safeSize);
-          remainingBison -= safeSize;
-        }
-
-        for (let herdIndex = 0; herdIndex < HERD_COUNT; herdIndex += 1) {
-          let centerX = 0, centerY = 0, attempts = 0, sufficientlySeparated = false;
-          do {
-            centerX = 10 + Math.random() * (GRID_SIZE - 20);
-            centerY = 10 + Math.random() * (GRID_SIZE - 20);
-            const candidateCell = newGrid[Math.floor(centerY)][Math.floor(centerX)];
-            sufficientlySeparated = newHerds.every(existingHerd => Math.hypot(centerX - existingHerd.centerX, centerY - existingHerd.centerY) > 18);
-            attempts += 1;
-            if (candidateCell.type === TYPE_PRAIRIE && sufficientlySeparated) break;
-          } while (attempts < 1200);
-
-          const direction = Math.random() * Math.PI * 2;
-          const herdSpeed = 0.12 + Math.random() * 0.06;
-          const herd = {
-            id: herdIndex, centerX, centerY,
-            vx: Math.cos(direction) * herdSpeed, vy: Math.sin(direction) * herdSpeed,
-            targetX: 8 + Math.random() * (GRID_SIZE - 16), targetY: 8 + Math.random() * (GRID_SIZE - 16),
-            targetTimer: 300 + Math.floor(Math.random() * 500),
-          };
-          newHerds.push(herd);
-
-          for (let memberIndex = 0; memberIndex < herdSizes[herdIndex]; memberIndex += 1) {
-            let bisonX = centerX, bisonY = centerY, spawnAttempts = 0;
-            do {
-              const angle = Math.random() * Math.PI * 2;
-              const distance = 1.5 + Math.random() * 5;
-              bisonX = clamp(centerX + Math.cos(angle) * distance, 0.05, GRID_SIZE - 0.05);
-              bisonY = clamp(centerY + Math.sin(angle) * distance, 0.05, GRID_SIZE - 0.05);
-              spawnAttempts += 1;
-            } while (spawnAttempts < 100 && newGrid[Math.floor(bisonY)][Math.floor(bisonX)].type !== TYPE_PRAIRIE);
-
-            newBison.push({
-              x: bisonX, y: bisonY, previousX: bisonX, previousY: bisonY,
-              vx: herd.vx + (Math.random() - 0.5) * 0.08, vy: herd.vy + (Math.random() - 0.5) * 0.08,
-              herdId: herdIndex, turnBias: (Math.random() - 0.5) * 0.04,
-            });
-          }
-        }
-
-        gridRef.current = newGrid;
-        bisonRef.current = newBison;
-        herdsRef.current = newHerds;
-        tickRef.current = 0;
-        accumulatedTimeRef.current = 0;
-        previousFrameTimeRef.current = 0;
-        setTicks(0);
-        calculateStats(newGrid);
-        requestAnimationFrame(drawCanvas);
-      }, [calculateStats, drawCanvas]);
-
-      const igniteCell = useCallback((grid, x, y, intensity = 1) => {
-        if (!isInsideGrid(x, y)) return false;
-        const cell = grid[y][x];
-        if (cell.type === TYPE_WATER || cell.onFire > 0 || cell.veg === VEG_BARE) return false;
-        cell.onFire = FIRE_DURATION;
-        cell.fireIntensity = intensity;
-        return true;
-      }, []);
-
-      const igniteRandomPrairieGrass = useCallback((grid, attempts = 300) => {
-        for (let attempt = 0; attempt < attempts; attempt += 1) {
-          const x = Math.floor(Math.random() * GRID_SIZE);
-          const y = Math.floor(Math.random() * GRID_SIZE);
-          const cell = grid[y][x];
-          if (cell.type === TYPE_PRAIRIE && cell.veg === VEG_MATURE_GRASS && cell.onFire === 0) {
-            igniteCell(grid, x, y, 1);
-            return { x, y };
-          }
-        }
-        return null;
-      }, [igniteCell]);
-
-      const updateHerdCenters = useCallback((grid) => {
-        for (const herd of herdsRef.current) {
-          herd.targetTimer -= 1;
-          if (herd.targetTimer <= 0) {
-            let targetX = herd.centerX, targetY = herd.centerY, attempts = 0;
-            do {
-              targetX = 8 + Math.random() * (GRID_SIZE - 16);
-              targetY = 8 + Math.random() * (GRID_SIZE - 16);
-              attempts += 1;
-            } while (attempts < 300 && grid[Math.floor(targetY)][Math.floor(targetX)].type !== TYPE_PRAIRIE);
-            herd.targetX = targetX;
-            herd.targetY = targetY;
-            herd.targetTimer = 300 + Math.floor(Math.random() * 600);
-          }
-
-          const directionX = herd.targetX - herd.centerX;
-          const directionY = herd.targetY - herd.centerY;
-          const distance = Math.hypot(directionX, directionY);
-
-          if (distance > 0.001) {
-            herd.vx += (directionX / distance) * HERD_WANDER_STRENGTH;
-            herd.vy += (directionY / distance) * HERD_WANDER_STRENGTH;
-          }
-
-          const randomTurn = (Math.random() - 0.5) * 0.07;
-          const cosine = Math.cos(randomTurn);
-          const sine = Math.sin(randomTurn);
-          const previousHerdVx = herd.vx;
-          const previousHerdVy = herd.vy;
-          herd.vx = previousHerdVx * cosine - previousHerdVy * sine;
-          herd.vy = previousHerdVx * sine + previousHerdVy * cosine;
-
-          const herdVelocity = Math.hypot(herd.vx, herd.vy);
-          if (herdVelocity > 0.001) {
-            herd.vx = (herd.vx / herdVelocity) * 0.15;
-            herd.vy = (herd.vy / herdVelocity) * 0.15;
-          }
-
-          const proposedX = clamp(herd.centerX + herd.vx, 1, GRID_SIZE - 2);
-          const proposedY = clamp(herd.centerY + herd.vy, 1, GRID_SIZE - 2);
-          const destination = grid[Math.floor(proposedY)][Math.floor(proposedX)];
-
-          if (destination.type === TYPE_PRAIRIE || destination.type === TYPE_WETLAND) {
-            herd.centerX = proposedX;
-            herd.centerY = proposedY;
-          } else {
-            herd.vx *= -1;
-            herd.vy *= -1;
-            herd.targetTimer = 0;
-          }
-        }
-      }, []);
-
-      const runEcologicalTick = useCallback(() => {
-        const currentGrid = gridRef.current;
-        if (!currentGrid.length) return;
-        const nextGrid = currentGrid.map((row) => row.map((cell) => ({ ...cell })));
-
-        for (let y = 0; y < GRID_SIZE; y += 1) {
-          for (let x = 0; x < GRID_SIZE; x += 1) {
-            const source = currentGrid[y][x];
-            const target = nextGrid[y][x];
-
-            if (source.type === TYPE_WATER) { target.veg = VEG_BARE; target.onFire = 0; target.fireIntensity = 0; continue; }
-            if (source.onFire > 0) continue;
-
-            if (source.veg === VEG_BARE) {
-              let chance = GRASS_REGROWTH_CHANCE;
-              if (source.type === TYPE_WETLAND) chance *= 2.2;
-              else if (source.type === TYPE_RIPARIAN) chance *= 1.65;
-              else if (source.type === TYPE_ROCK) chance *= 0.45;
-              if (Math.random() < chance) target.veg = VEG_SPARSE_GRASS;
-            }
-
-            if (source.veg === VEG_SPARSE_GRASS) {
-              let chance = GRASS_MATURATION_CHANCE;
-              if (source.type === TYPE_WETLAND) chance *= 0.18;
-              else if (source.type === TYPE_RIPARIAN) chance *= 0.5;
-              else if (source.type === TYPE_ROCK) chance *= 0.35;
-              if (Math.random() < chance) target.veg = VEG_MATURE_GRASS;
-            }
-
-            if (source.type === TYPE_PRAIRIE && (source.veg === VEG_BARE || source.veg === VEG_SPARSE_GRASS || source.veg === VEG_MATURE_GRASS)) {
-              if (Math.random() < SHRUB_BIRD_DROP_CHANCE * getGrassCompetitionMultiplier(source.veg)) {
-                target.veg = VEG_SHRUB;
-              }
-            }
-
-            if (source.veg === VEG_SAPLING) {
-              target.saplingAge = source.saplingAge + 1;
-              if (target.saplingAge >= SAPLING_MATURATION_TIME) {
-                target.veg = VEG_TREE;
-                target.saplingAge = 0;
-              }
-            }
-
-            if (source.veg === VEG_SHRUB && Math.random() < SHRUB_LOCAL_SPREAD_CHANCE) {
-              const neighbor = ALL_NEIGHBORS[Math.floor(Math.random() * ALL_NEIGHBORS.length)];
-              const nx = x + neighbor[0];
-              const ny = y + neighbor[1];
-              if (isInsideGrid(nx, ny)) {
-                const dest = currentGrid[ny][nx];
-                if (dest.type !== TYPE_WATER && dest.onFire === 0 && (dest.veg === VEG_BARE || dest.veg === VEG_SPARSE_GRASS || dest.veg === VEG_MATURE_GRASS)) {
-                  if (Math.random() < getGrassCompetitionMultiplier(dest.veg)) {
-                    nextGrid[ny][nx].veg = VEG_SHRUB;
-                    nextGrid[ny][nx].saplingAge = 0;
-                  }
-                }
-              }
-            }
-
-            if (source.veg === VEG_TREE && Math.random() < TREE_SEED_CHANCE) {
-              const radius = 1 + Math.floor(Math.random() * 3);
-              const dx = Math.floor(Math.random() * (radius * 2 + 1)) - radius;
-              const dy = Math.floor(Math.random() * (radius * 2 + 1)) - radius;
-              const nx = x + dx;
-              const ny = y + dy;
-              if (isInsideGrid(nx, ny) && !(dx === 0 && dy === 0)) {
-                const dest = currentGrid[ny][nx];
-                if (dest.type !== TYPE_WATER && dest.onFire === 0 && (dest.veg === VEG_BARE || dest.veg === VEG_SPARSE_GRASS || dest.veg === VEG_MATURE_GRASS || dest.veg === VEG_SHRUB)) {
-                  const chance = getTreeTerrainMultiplier(dest.type) * getGrassCompetitionMultiplier(dest.veg);
-                  if (Math.random() < chance) {
-                    nextGrid[ny][nx].veg = VEG_SAPLING;
-                    nextGrid[ny][nx].saplingAge = 0;
-                  }
-                }
-              }
-            }
-          }
-        }
-
-        for (let y = 0; y < GRID_SIZE; y += 1) {
-          for (let x = 0; x < GRID_SIZE; x += 1) {
-            const source = currentGrid[y][x];
-            if (source.onFire <= 0) continue;
-            const target = nextGrid[y][x];
-            target.onFire = Math.max(0, source.onFire - 1);
-
-            if (target.onFire > 0) {
-              for (const neighbor of CARDINAL_NEIGHBORS) {
-                const nx = x + neighbor[0];
-                const ny = y + neighbor[1];
-                if (!isInsideGrid(nx, ny)) continue;
-                const nSource = currentGrid[ny][nx];
-                const nTarget = nextGrid[ny][nx];
-                if (nSource.type === TYPE_WATER || nSource.onFire > 0 || nTarget.onFire > 0) continue;
-                
-                const ignitionChance = (FIRE_IGNITION_CHANCE[nSource.veg] || 0) * getTerrainFireMultiplier(nSource.type);
-                if (Math.random() < ignitionChance) {
-                  nTarget.onFire = FIRE_DURATION;
-                  nTarget.fireIntensity = clamp(source.fireIntensity * 0.82 + (FIRE_IGNITION_CHANCE[nSource.veg] || 0) * 0.75, 0.15, 1.5);
-                }
-              }
-            } else {
-              const intensity = clamp(source.fireIntensity || 0.5, 0, 1.5);
-              if (source.veg === VEG_MATURE_GRASS || source.veg === VEG_SPARSE_GRASS) {
-                target.veg = VEG_BARE;
-              } else if (source.veg === VEG_SHRUB) {
-                if (Math.random() < clamp(0.65 + (intensity - 0.7) * 0.15, 0.5, 0.82)) target.veg = VEG_BARE;
-              } else if (source.veg === VEG_SAPLING) {
-                if (Math.random() < clamp(0.75 + (intensity - 0.7) * 0.15, 0.62, 0.92)) { target.veg = VEG_BARE; target.saplingAge = 0; }
-              } else if (source.veg === VEG_TREE) {
-                let mortality = source.type === TYPE_PRAIRIE ? clamp(0.25 + (intensity - 0.7) * 0.12, 0.16, 0.42) : (source.type === TYPE_ROCK ? 0.1 : 0.025);
-                if (Math.random() < mortality) target.veg = VEG_BARE;
-              }
-              target.fireIntensity = 0;
-            }
-          }
-        }
-
-        if (lightningActiveRef.current && Math.random() < LIGHTNING_EVENT_CHANCE) igniteRandomPrairieGrass(nextGrid);
-
-        if (indigenousBurnsActiveRef.current && Math.random() < INDIGENOUS_BURN_CHANCE) {
-          const ignition = igniteRandomPrairieGrass(nextGrid);
-          if (ignition) {
-            const horizontal = Math.random() < 0.5;
-            for (let offset = -3; offset <= 3; offset += 1) {
-              const ix = ignition.x + (horizontal ? offset : 0);
-              const iy = ignition.y + (horizontal ? 0 : offset);
-              if (isInsideGrid(ix, iy) && nextGrid[iy][ix].type === TYPE_PRAIRIE && nextGrid[iy][ix].veg === VEG_MATURE_GRASS) {
-                igniteCell(nextGrid, ix, iy, 0.85);
-              }
-            }
-          }
-        }
-
-        if (bisonActiveRef.current) {
-          updateHerdCenters(nextGrid);
-          for (const bison of bisonRef.current) {
-            bison.previousX = bison.x;
-            bison.previousY = bison.y;
-            const herd = herdsRef.current[bison.herdId];
-
-            if (herd) {
-              const dx = herd.centerX - bison.x;
-              const dy = herd.centerY - bison.y;
-              const dist = Math.hypot(dx, dy);
-              if (dist > 0.001) {
-                const cohesion = dist > 8 ? HERD_COHESION * 2.5 : HERD_COHESION;
-                bison.vx += (dx / dist) * cohesion;
-                bison.vy += (dy / dist) * cohesion;
-              }
-              bison.vx += (herd.vx - bison.vx) * HERD_ALIGNMENT;
-              bison.vy += (herd.vy - bison.vy) * HERD_ALIGNMENT;
-            }
-
-            for (const other of bisonRef.current) {
-              if (other === bison || other.herdId !== bison.herdId) continue;
-              const sx = bison.x - other.x;
-              const sy = bison.y - other.y;
-              const sDist = Math.hypot(sx, sy);
-              if (sDist > 0 && sDist < 1.8) {
-                bison.vx += (sx / sDist) * BISON_SEPARATION;
-                bison.vy += (sy / sDist) * BISON_SEPARATION;
-              }
-            }
-
-            if (Math.random() < 0.12) {
-              const turn = (Math.random() - 0.5) * 0.18 + bison.turnBias;
-              const cos = Math.cos(turn), sin = Math.sin(turn);
-              const previousBisonVx = bison.vx;
-              const previousBisonVy = bison.vy;
-              bison.vx = previousBisonVx * cos - previousBisonVy * sin;
-              bison.vy = previousBisonVx * sin + previousBisonVy * cos;
-            }
-
-            bison.x = clamp(bison.x + bison.vx, 0.05, GRID_SIZE - 0.05);
-            bison.y = clamp(bison.y + bison.vy, 0.05, GRID_SIZE - 0.05);
-            if (bison.x <= 0.05 || bison.x >= GRID_SIZE - 0.05) bison.vx *= -1;
-            if (bison.y <= 0.05 || bison.y >= GRID_SIZE - 0.05) bison.vy *= -1;
-
-            let cellX = Math.floor(bison.x), cellY = Math.floor(bison.y);
-            let occupiedCell = nextGrid[cellY][cellX];
-
-            if (occupiedCell.type === TYPE_WATER || occupiedCell.type === TYPE_RIPARIAN || occupiedCell.type === TYPE_ROCK) {
-              bison.x = bison.previousX;
-              bison.y = bison.previousY;
-              const turn = Math.PI * (0.55 + Math.random() * 0.45);
-              const cos = Math.cos(turn), sin = Math.sin(turn);
-              const blockedVx = bison.vx;
-              const blockedVy = bison.vy;
-              bison.vx = blockedVx * cos - blockedVy * sin;
-              bison.vy = blockedVx * sin + blockedVy * cos;
-              cellX = Math.floor(bison.x);
-              cellY = Math.floor(bison.y);
-              occupiedCell = nextGrid[cellY][cellX];
-            }
-
-            const currentSpeed = Math.hypot(bison.vx, bison.vy);
-            if (currentSpeed > MAX_BISON_SPEED) {
-              bison.vx = (bison.vx / currentSpeed) * MAX_BISON_SPEED;
-              bison.vy = (bison.vy / currentSpeed) * MAX_BISON_SPEED;
-            } else if (currentSpeed < MIN_BISON_SPEED) {
-              const angle = Math.random() * Math.PI * 2;
-              bison.vx = Math.cos(angle) * 0.14;
-              bison.vy = Math.sin(angle) * 0.14;
-            }
-
-            if (occupiedCell.veg === VEG_MATURE_GRASS) occupiedCell.veg = VEG_SPARSE_GRASS;
-            else if (occupiedCell.veg === VEG_SPARSE_GRASS && Math.random() < 0.09) occupiedCell.veg = VEG_BARE;
-            else if (occupiedCell.veg === VEG_SHRUB && Math.random() < 0.1) occupiedCell.veg = VEG_SPARSE_GRASS;
-            else if (occupiedCell.veg === VEG_SAPLING && Math.random() < 0.17) { occupiedCell.veg = VEG_BARE; occupiedCell.saplingAge = 0; }
-
-            if (Math.random() < 0.012) {
-              occupiedCell.veg = VEG_BARE;
-              occupiedCell.saplingAge = 0;
-              for (const neighbor of ALL_NEIGHBORS) {
-                const nx = cellX + neighbor[0], ny = cellY + neighbor[1];
-                if (isInsideGrid(nx, ny) && Math.random() < 0.36) {
-                  const nearby = nextGrid[ny][nx];
-                  if (nearby.type === TYPE_PRAIRIE && nearby.veg !== VEG_TREE) { nearby.veg = VEG_BARE; nearby.saplingAge = 0; }
-                }
-              }
-            } else if (Math.random() < 0.045) {
-              const n = CARDINAL_NEIGHBORS[Math.floor(Math.random() * CARDINAL_NEIGHBORS.length)];
-              const nx = cellX + n[0], ny = cellY + n[1];
-              if (isInsideGrid(nx, ny)) {
-                const nearby = nextGrid[ny][nx];
-                if (nearby.type === TYPE_PRAIRIE && nearby.veg === VEG_MATURE_GRASS) nearby.veg = VEG_SPARSE_GRASS;
-                else if (nearby.type === TYPE_PRAIRIE && (nearby.veg === VEG_SHRUB || nearby.veg === VEG_SAPLING) && Math.random() < 0.16) { nearby.veg = VEG_BARE; nearby.saplingAge = 0; }
-              }
-            }
-          }
-        }
-
-        gridRef.current = nextGrid;
-        tickRef.current += 1;
-        if (tickRef.current % 4 === 0) setTicks(tickRef.current);
-        if (tickRef.current % 12 === 0) calculateStats(nextGrid);
-      }, [calculateStats, igniteCell, igniteRandomPrairieGrass, updateHerdCenters]);
-
-      const animate = useCallback((timestamp) => {
-        if (previousFrameTimeRef.current === 0) previousFrameTimeRef.current = timestamp;
-        const elapsed = Math.min(timestamp - previousFrameTimeRef.current, 250);
-        previousFrameTimeRef.current = timestamp;
-
-        if (runningRef.current) {
-          accumulatedTimeRef.current += elapsed * speedRef.current;
-          let stepsThisFrame = 0;
-          while (accumulatedTimeRef.current >= ECOLOGICAL_STEP_MS && stepsThisFrame < 10) {
-            runEcologicalTick();
-            accumulatedTimeRef.current -= ECOLOGICAL_STEP_MS;
-            stepsThisFrame += 1;
-          }
-        }
-        drawCanvas();
-        animationFrameRef.current = requestAnimationFrame(animate);
-      }, [drawCanvas, runEcologicalTick]);
-
-      useEffect(() => {
-        initializeSimulation();
-        animationFrameRef.current = requestAnimationFrame(animate);
-        return () => { if (animationFrameRef.current) cancelAnimationFrame(animationFrameRef.current); };
-      }, [animate, initializeSimulation]);
-
-      const handleReset = () => { initializeSimulation(); };
-
-      const igniteAtCanvasPoint = (event) => {
-        const canvas = canvasRef.current;
-        const grid = gridRef.current;
-        if (!canvas || !grid.length) return;
-
-        const rect = canvas.getBoundingClientRect();
-        const scaleX = canvas.width / rect.width;
-        const scaleY = canvas.height / rect.height;
-        const x = Math.floor(((event.clientX - rect.left) * scaleX) / CELL_SIZE);
-        const y = Math.floor(((event.clientY - rect.top) * scaleY) / CELL_SIZE);
-
-        if (igniteCell(grid, x, y, 1)) {
-          calculateStats(grid);
-          drawCanvas();
-        }
-      };
-
-      const triggerManualFire = () => {
-        const grid = gridRef.current;
-        if (!grid.length) return;
-        const candidates = [];
-        for (let y = 0; y < GRID_SIZE; y += 1) {
-          for (let x = 0; x < GRID_SIZE; x += 1) {
-            if (grid[y][x].type === TYPE_PRAIRIE && grid[y][x].veg === VEG_MATURE_GRASS && grid[y][x].onFire === 0) candidates.push({ x, y });
-          }
-        }
-        if (!candidates.length) return;
-        const target = candidates[Math.floor(Math.random() * candidates.length)];
-        igniteCell(grid, target.x, target.y, 1);
-        calculateStats(grid);
-        drawCanvas();
-      };
-
-      return (
-        <div className="flex min-h-screen w-full flex-col bg-slate-100 font-sans text-slate-900 md:h-screen md:flex-row">
-          <aside className="z-10 flex w-full flex-col gap-4 overflow-y-auto border-r border-slate-200 bg-white p-5 shadow-xl md:w-[400px] md:min-w-[400px]">
-            <header>
-              <div className="mb-2 flex items-center justify-between gap-3"><h1 className="text-2xl font-bold tracking-tight text-slate-800">Blackland Transition</h1><span className="rounded-full bg-green-700 px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide text-white">v2.0</span></div>
-              <p className="mt-1 text-sm text-slate-500">Pre-European Geographic Equilibrium</p>
-              <p className="mt-2 text-xs leading-relaxed text-slate-500">A conceptual Central Texas prairie–woodland model exploring hydrology, fire, grazing, and woody succession.</p>
-              <p className="mt-2 rounded-lg border border-amber-200 bg-amber-50 p-2 text-[11px] leading-relaxed text-amber-900"><b>Educational model:</b> This simplifies complex historical ecosystems and does not reproduce exact fire intervals, animal densities, or vegetation percentages.</p>
-            </header>
-
-            <section className="space-y-3">
-              <div className="rounded-xl border border-slate-200 bg-slate-100 p-4">
-                <div className="mb-2 flex items-center justify-between"><span className="text-xs font-semibold uppercase tracking-wide text-slate-500">Simulation Time</span></div>
-                <div className="font-mono text-3xl font-light text-slate-700">{ticks}<span className="ml-2 text-sm text-slate-500">ticks</span></div>
-              </div>
-
-              <div className="flex gap-2">
-                <button type="button" onClick={() => setIsRunning(c => !c)} className={`flex-1 rounded-lg py-2 font-medium transition-colors ${isRunning ? "bg-red-100 text-red-700 hover:bg-red-200" : "bg-green-600 text-white hover:bg-green-700"}`}>{isRunning ? "Pause" : "Start"}</button>
-                <button type="button" onClick={handleReset} className="rounded-lg bg-slate-200 px-4 py-2 font-medium text-slate-700 transition-colors hover:bg-slate-300">Reset</button>
-              </div>
-
-              <div className="flex gap-2 pt-1">
-                <button type="button" onClick={() => setSpeed(1)} className={`flex-1 rounded-lg py-1.5 text-sm font-medium transition-colors ${speed === 1 ? "bg-slate-700 text-white" : "bg-slate-200 text-slate-700 hover:bg-slate-300"}`}>1x Speed</button>
-                <button type="button" onClick={() => setSpeed(2)} className={`flex-1 rounded-lg py-1.5 text-sm font-medium transition-colors ${speed === 2 ? "bg-slate-700 text-white" : "bg-slate-200 text-slate-700 hover:bg-slate-300"}`}>2x Speed</button>
-                <button type="button" onClick={() => setSpeed(4)} className={`flex-1 rounded-lg py-1.5 text-sm font-medium transition-colors ${speed === 4 ? "bg-slate-700 text-white" : "bg-slate-200 text-slate-700 hover:bg-slate-300"}`}>4x Speed</button>
-              </div>
-            </section>
-            
-            <section className="space-y-3">
-              <div className="flex items-center justify-between">
-                <h2 className="text-sm font-bold uppercase tracking-wide text-green-800">Live Ecosystem Dashboard</h2>
-                <span className="text-[10px] text-slate-400">land cells</span>
-              </div>
-
-              <div className="grid grid-cols-2 gap-3 text-xs">
-                <div className="rounded-xl border-2 border-green-300 bg-green-50 p-3 shadow-sm"><div className="text-slate-500">Grassland</div><div className="text-2xl font-bold text-green-800">{stats.grass}%</div></div>
-                <div className="rounded-xl border-2 border-emerald-300 bg-emerald-50 p-3 shadow-sm"><div className="text-slate-500">Woody cover</div><div className="text-2xl font-bold text-emerald-900">{stats.woody}%</div></div>
-                <div className="rounded-xl border-2 border-stone-300 bg-stone-50 p-3 shadow-sm"><div className="text-slate-500">Bare ground</div><div className="text-2xl font-bold text-stone-700">{stats.bare}%</div></div>
-                <div className="rounded-xl border-2 border-orange-300 bg-orange-50 p-3 shadow-sm"><div className="text-slate-500">Actively burning</div><div className="text-2xl font-bold text-orange-800">{stats.burning}%</div></div>
-              </div>
-
-              <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-[11px] leading-relaxed text-slate-600">
-                <b className="text-slate-700">What the model is showing:</b> {getLandscapeMessage()}
-                <div className="mt-2 text-slate-500">Woody detail: {stats.shrubs}% shrubs · {stats.saplings}% saplings · {stats.trees}% trees</div>
-              </div>
-            </section>
-
-            <hr className="my-1 border-slate-200" />
-
-            <section className="space-y-3">
-              <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-500">Ecological Drivers</h2>
-              <label className="flex cursor-pointer items-center justify-between rounded-lg border border-slate-200 p-3 transition-colors hover:bg-slate-50"><span className="flex items-center gap-3"><span className="h-4 w-4 rounded-full bg-[#4e342e]" /><span className="text-sm font-medium text-slate-700">Migratory Bison Herds</span></span><input type="checkbox" checked={bisonActive} onChange={(e) => setBisonActive(e.target.checked)} className="h-5 w-5 rounded text-green-600 focus:ring-green-500" /></label>
-              <label className="flex cursor-pointer items-center justify-between rounded-lg border border-slate-200 p-3 transition-colors hover:bg-slate-50"><span className="flex items-center gap-3"><span className="h-4 w-4 rounded-full bg-[#ffc107]" /><span className="text-sm font-medium text-slate-700">Lightning Fires</span></span><input type="checkbox" checked={lightningActive} onChange={(e) => setLightningActive(e.target.checked)} className="h-5 w-5 rounded text-green-600 focus:ring-green-500" /></label>
-              <label className="flex cursor-pointer items-center justify-between rounded-lg border border-slate-200 p-3 transition-colors hover:bg-slate-50"><span className="flex items-center gap-3"><span className="h-4 w-4 rounded-full bg-[#ff5722]" /><span className="text-sm font-medium text-slate-700">Indigenous Burns</span></span><input type="checkbox" checked={indigenousBurnsActive} onChange={(e) => setIndigenousBurnsActive(e.target.checked)} className="h-5 w-5 rounded text-green-600 focus:ring-green-500" /></label>
-            </section>
-
-            <button type="button" onClick={triggerManualFire} className="w-full rounded-lg border border-orange-200 bg-orange-100 py-2 font-medium text-orange-800 transition-colors hover:bg-orange-200">Ignite Random Prairie Fire</button>
-
-            <section className="rounded-lg border border-blue-200 bg-blue-50 p-3 text-[11px] leading-relaxed text-blue-900">
-              <b className="text-sm">Guided experiment:</b> <br />1. Run all drivers for 500 ticks.<br />2. Record woody cover.<br />3. Reset and turn fire and bison off.<br />4. Compare the result at 500 ticks.<br /><span className="mt-1 inline-block font-medium">Tip: click directly on mature grass to ignite a fire.</span>
-            </section>
-
-            <section className="mt-auto pt-2">
-              <h3 className="mb-2 text-xs font-bold uppercase tracking-wide text-slate-700">Native Plant Key</h3>
-              <ul className="space-y-2 text-[11px] leading-tight text-slate-600">
-                <li className="flex items-start gap-2"><span className="mt-0.5 h-3 w-3 flex-shrink-0 bg-[#004d40]" /><span><b>Riparian Corridor:</b> <i>Salix nigra</i>, <i>Carya illinoinensis</i>, <i>Celtis</i></span></li>
-                <li className="flex items-start gap-2"><span className="mt-0.5 h-3 w-3 flex-shrink-0 bg-[#1b5e20]" /><span><b>Balcones Escarpment:</b> <i>Quercus fusiformis</i>, <i>Juniperus ashei</i></span></li>
-                <li className="flex items-start gap-2"><span className="mt-0.5 h-3 w-3 flex-shrink-0 bg-[#2e7d32]" /><span><b>Prairie Motts:</b> Upland <i>Quercus</i> &amp; <i>Prunus</i></span></li>
-                <li className="flex items-start gap-2"><span className="mt-0.5 h-3 w-3 flex-shrink-0 bg-[#827717]" /><span><b>Woody Shrubs:</b> <i>Rhus</i>, <i>Acacia</i>, <i>Baccharis</i></span></li>
-                <li className="flex items-start gap-2"><span className="mt-0.5 h-3 w-3 flex-shrink-0 bg-[#7cb342]" /><span><b>Mature Grasses:</b> <i>Andropogon</i>, <i>Bouteloua</i>, <i>Panicum</i></span></li>
-                <li className="flex items-start gap-2"><span className="mt-0.5 flex h-3 w-3 flex-shrink-0 overflow-hidden"><span className="h-full w-1/2 bg-[#0288d1]" /><span className="h-full w-1/2 bg-[#d2b48c]" /></span><span>Water, Bare Dirt &amp; Gilgai Depressions</span></li>
-              </ul>
-            </section>
-          </aside>
-
-          <main className="flex flex-1 items-center justify-center overflow-auto bg-slate-200 p-3 md:p-8">
-            <div className="inline-block max-h-full max-w-full rounded-xl bg-white p-2 shadow-2xl">
-              <canvas ref={canvasRef} onClick={igniteAtCanvasPoint} width={CANVAS_SIZE} height={CANVAS_SIZE} className="block max-h-[calc(100vh-4rem)] max-w-full cursor-crosshair rounded-lg" style={{ imageRendering: "pixelated", aspectRatio: "1 / 1" }} aria-label="Interactive Blackland Prairie transition simulation. Click grassland to ignite a fire." title="Click a burnable grass cell to ignite a fire" />
-            </div>
-          </main>
-        </div>
-      );
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#183b2b">
+  <meta name="description" content="An interactive educational explorer showing how fire, grazing, water, urbanization, fragmentation, invasive species, and restoration shape a San Marcos–Kyle inspired Central Texas landscape.">
+  <meta name="robots" content="index, follow">
+  <title>Central Texas Landscape Explorer</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --forest: #183b2b;
+      --forest-2: #24583f;
+      --sage: #7f9b79;
+      --sage-light: #e8efe5;
+      --cream: #f7f3e8;
+      --paper: #fffdf7;
+      --gold: #bd8c3c;
+      --water: #3f8fa8;
+      --water-dark: #23677d;
+      --sky: #dfeef2;
+      --ink: #1f2b25;
+      --muted: #64736b;
+      --border: #d7ded6;
+      --danger: #a34632;
+      --warning: #9a6a1f;
+      --shadow: 0 16px 38px rgba(29, 48, 37, 0.12);
+      --radius: 18px;
     }
 
-    const root = ReactDOM.createRoot(document.getElementById('root'));
-    root.render(<App />);
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      min-width: 320px;
+      background: linear-gradient(180deg, #eef3ed 0, #f7f3e8 28rem, #f7f3e8 100%);
+      color: var(--ink);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      line-height: 1.5;
+    }
+
+    button, select, input { font: inherit; }
+    button { cursor: pointer; }
+    button:focus-visible, select:focus-visible, input:focus-visible, a:focus-visible {
+      outline: 3px solid rgba(63, 143, 168, 0.45);
+      outline-offset: 2px;
+    }
+    a { color: var(--water-dark); }
+
+    .skip-link {
+      position: absolute;
+      left: -999px;
+      top: 0;
+      z-index: 1000;
+      padding: .8rem 1rem;
+      background: #fff;
+      color: #000;
+    }
+    .skip-link:focus { left: 1rem; top: 1rem; }
+
+    .site-header {
+      max-width: 1520px;
+      margin: 0 auto;
+      padding: 1rem clamp(1rem, 3vw, 2.5rem) .75rem;
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 1rem;
+    }
+    .brand-kicker {
+      display: inline-flex;
+      align-items: center;
+      gap: .45rem;
+      margin-bottom: .25rem;
+      color: var(--forest-2);
+      font-size: .76rem;
+      font-weight: 800;
+      letter-spacing: .12em;
+      text-transform: uppercase;
+    }
+    .site-header h1 {
+      margin: 0;
+      color: var(--forest);
+      font-size: clamp(1.65rem, 4vw, 3rem);
+      line-height: 1.05;
+      letter-spacing: -.035em;
+    }
+    .site-header p {
+      max-width: 850px;
+      margin: .5rem 0 0;
+      color: var(--muted);
+      font-size: clamp(.92rem, 1.5vw, 1.08rem);
+    }
+    .version-pill {
+      flex: 0 0 auto;
+      margin-top: .15rem;
+      padding: .42rem .7rem;
+      border: 1px solid rgba(24, 59, 43, .18);
+      border-radius: 999px;
+      background: rgba(255, 255, 255, .72);
+      color: var(--forest);
+      font-size: .74rem;
+      font-weight: 800;
+      white-space: nowrap;
+    }
+
+    main { padding: 0 clamp(.7rem, 2vw, 1.5rem) 4rem; }
+    .explorer {
+      max-width: 1520px;
+      margin: 0 auto;
+      overflow: hidden;
+      border: 1px solid rgba(24, 59, 43, .17);
+      border-radius: 24px;
+      background: var(--paper);
+      box-shadow: var(--shadow);
+    }
+
+    .era-bar {
+      display: flex;
+      align-items: stretch;
+      gap: .3rem;
+      overflow-x: auto;
+      padding: .65rem;
+      border-bottom: 1px solid var(--border);
+      background: #f0f4ee;
+      scrollbar-width: thin;
+    }
+    .era-button {
+      flex: 1 0 auto;
+      min-width: 128px;
+      padding: .7rem .8rem;
+      border: 1px solid transparent;
+      border-radius: 12px;
+      background: transparent;
+      color: #456053;
+      font-size: .82rem;
+      font-weight: 800;
+      transition: background .15s ease, color .15s ease, transform .15s ease;
+    }
+    .era-button:hover { background: rgba(255,255,255,.8); }
+    .era-button[aria-selected="true"] {
+      border-color: rgba(24,59,43,.2);
+      background: var(--forest);
+      color: #fff;
+      box-shadow: 0 5px 14px rgba(24,59,43,.18);
+    }
+
+    .explorer-main {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 355px;
+      min-height: 660px;
+    }
+    .map-column {
+      min-width: 0;
+      padding: clamp(.6rem, 1.5vw, 1rem);
+      background: #dfe7dc;
+    }
+    .canvas-frame {
+      position: relative;
+      display: grid;
+      place-items: center;
+      width: 100%;
+      overflow: hidden;
+      border: 1px solid rgba(15, 43, 29, .32);
+      border-radius: 16px;
+      background: #c8d1c2;
+      box-shadow: inset 0 0 0 1px rgba(255,255,255,.25);
+    }
+    #landscapeCanvas {
+      display: block;
+      width: min(100%, 920px);
+      height: auto;
+      aspect-ratio: 1 / 1;
+      background: #d8c58d;
+      image-rendering: pixelated;
+      touch-action: manipulation;
+    }
+    .canvas-frame.is-ignite #landscapeCanvas { cursor: crosshair; }
+    .map-badge {
+      position: absolute;
+      z-index: 3;
+      top: .65rem;
+      left: .65rem;
+      max-width: calc(100% - 1.3rem);
+      padding: .45rem .62rem;
+      border: 1px solid rgba(255,255,255,.55);
+      border-radius: 10px;
+      background: rgba(20, 46, 33, .88);
+      color: #fff;
+      font-size: .72rem;
+      font-weight: 700;
+      backdrop-filter: blur(7px);
+      pointer-events: none;
+    }
+    .process-key {
+      position: absolute;
+      z-index: 3;
+      right: .65rem;
+      bottom: .65rem;
+      max-width: 265px;
+      padding: .5rem .62rem;
+      border: 1px solid rgba(255,255,255,.65);
+      border-radius: 10px;
+      background: rgba(255,253,247,.9);
+      color: #31453b;
+      font-size: .68rem;
+      line-height: 1.35;
+      box-shadow: 0 6px 20px rgba(0,0,0,.12);
+      pointer-events: none;
+    }
+    .process-key[hidden] { display: none; }
+
+    .onboarding {
+      position: absolute;
+      z-index: 8;
+      top: 3.1rem;
+      right: .75rem;
+      width: min(310px, calc(100% - 1.5rem));
+      padding: .85rem;
+      border: 1px solid rgba(24,59,43,.23);
+      border-radius: 14px;
+      background: rgba(255,253,247,.97);
+      box-shadow: 0 18px 40px rgba(15,37,24,.25);
+    }
+    .onboarding[hidden] { display: none; }
+    .onboarding-step {
+      margin: 0 0 .25rem;
+      color: var(--forest-2);
+      font-size: .72rem;
+      font-weight: 900;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+    }
+    .onboarding h2 { margin: 0; font-size: 1rem; color: var(--forest); }
+    .onboarding p { margin: .35rem 0 .75rem; color: var(--muted); font-size: .84rem; }
+    .onboarding-actions { display: flex; justify-content: space-between; gap: .5rem; }
+
+    .map-toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: .45rem;
+      margin-top: .65rem;
+    }
+    .toolbar-spacer { flex: 1 1 auto; }
+
+    .button {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: .4rem;
+      min-height: 40px;
+      padding: .55rem .76rem;
+      border: 1px solid #c9d3ca;
+      border-radius: 10px;
+      background: #fff;
+      color: #254334;
+      font-size: .79rem;
+      font-weight: 800;
+      line-height: 1;
+      transition: transform .12s ease, background .12s ease, border-color .12s ease;
+    }
+    .button:hover { border-color: #8da493; background: #f7faf6; transform: translateY(-1px); }
+    .button.primary { border-color: var(--forest); background: var(--forest); color: #fff; }
+    .button.primary:hover { background: #214b37; }
+    .button.warn[aria-pressed="true"] { border-color: #c75b39; background: #fff0e8; color: #8c321c; }
+    .button.ghost { border-color: transparent; background: transparent; }
+    .button.small { min-height: 34px; padding: .42rem .6rem; font-size: .74rem; }
+    .button:disabled { opacity: .48; cursor: not-allowed; transform: none; }
+
+    .sidebar {
+      min-width: 0;
+      max-height: 945px;
+      overflow-y: auto;
+      border-left: 1px solid var(--border);
+      background: #fffdf8;
+      scrollbar-width: thin;
+    }
+    .side-section {
+      padding: .9rem 1rem;
+      border-bottom: 1px solid var(--border);
+    }
+    .side-section:last-child { border-bottom: 0; }
+    .side-title-row { display: flex; align-items: center; justify-content: space-between; gap: .75rem; }
+    .side-section h2, .side-section h3 {
+      margin: 0;
+      color: var(--forest);
+      font-size: .88rem;
+      letter-spacing: .01em;
+    }
+    .side-section p { margin: .35rem 0 0; color: var(--muted); font-size: .78rem; }
+    .time-value { color: var(--forest); font-size: 1.5rem; font-weight: 900; letter-spacing: -.04em; }
+    .time-label { color: var(--muted); font-size: .72rem; }
+    .control-grid { display: grid; grid-template-columns: 1fr 1fr; gap: .45rem; margin-top: .65rem; }
+    .control-grid .button { width: 100%; }
+    .field { margin-top: .68rem; }
+    .field label, .range-label {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: .7rem;
+      margin-bottom: .3rem;
+      color: #385246;
+      font-size: .75rem;
+      font-weight: 800;
+    }
+    select {
+      width: 100%;
+      min-height: 40px;
+      padding: .48rem .6rem;
+      border: 1px solid #c8d2c9;
+      border-radius: 10px;
+      background: #fff;
+      color: var(--ink);
+      font-size: .8rem;
+    }
+    input[type="range"] { width: 100%; accent-color: var(--forest-2); }
+    .range-value {
+      min-width: 2.7rem;
+      padding: .08rem .35rem;
+      border-radius: 999px;
+      background: var(--sage-light);
+      color: var(--forest);
+      text-align: center;
+      font-size: .7rem;
+      font-variant-numeric: tabular-nums;
+    }
+    .switch-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: .75rem;
+      margin-top: .6rem;
+      color: #385246;
+      font-size: .76rem;
+      font-weight: 750;
+    }
+    .switch {
+      position: relative;
+      flex: 0 0 auto;
+      width: 42px;
+      height: 24px;
+    }
+    .switch input { position: absolute; opacity: 0; width: 1px; height: 1px; }
+    .switch span {
+      position: absolute;
+      inset: 0;
+      border-radius: 999px;
+      background: #bac5bc;
+      transition: background .18s ease;
+    }
+    .switch span::after {
+      content: "";
+      position: absolute;
+      width: 18px;
+      height: 18px;
+      top: 3px;
+      left: 3px;
+      border-radius: 50%;
+      background: #fff;
+      box-shadow: 0 1px 4px rgba(0,0,0,.25);
+      transition: transform .18s ease;
+    }
+    .switch input:checked + span { background: var(--forest-2); }
+    .switch input:checked + span::after { transform: translateX(18px); }
+    .switch input:focus-visible + span { outline: 3px solid rgba(63,143,168,.42); outline-offset: 2px; }
+
+    .stat-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0,1fr));
+      gap: .45rem;
+      margin-top: .6rem;
+    }
+    .stat {
+      min-width: 0;
+      padding: .55rem .6rem;
+      border: 1px solid var(--border);
+      border-radius: 11px;
+      background: #fff;
+    }
+    .stat span { display: block; color: var(--muted); font-size: .66rem; line-height: 1.2; }
+    .stat strong { display: block; margin-top: .12rem; color: var(--forest); font-size: 1.05rem; line-height: 1; font-variant-numeric: tabular-nums; }
+    .stat.wide { grid-column: 1 / -1; }
+    .bar {
+      height: 7px;
+      margin-top: .35rem;
+      overflow: hidden;
+      border-radius: 99px;
+      background: #e7ece7;
+    }
+    .bar > span { display: block; height: 100%; width: 0; border-radius: inherit; background: var(--forest-2); transition: width .25s ease; }
+
+    .service-list, .species-list { display: grid; gap: .5rem; margin-top: .6rem; }
+    .service-row, .species-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      align-items: center;
+      gap: .5rem;
+    }
+    .service-row span, .species-row span { color: #385246; font-size: .73rem; font-weight: 750; }
+    .score-badge {
+      min-width: 2.4rem;
+      padding: .12rem .38rem;
+      border-radius: 999px;
+      background: var(--sage-light);
+      color: var(--forest);
+      text-align: center;
+      font-size: .68rem;
+      font-weight: 900;
+      font-variant-numeric: tabular-nums;
+    }
+    .species-row { grid-template-columns: 1.35rem minmax(0,1fr) auto; }
+    .species-icon { font-size: 1rem; }
+
+    .interpretation {
+      padding: .65rem .7rem;
+      border-left: 4px solid var(--gold);
+      border-radius: 0 10px 10px 0;
+      background: #fbf3df;
+      color: #55431e;
+      font-size: .76rem;
+    }
+
+    .custom-controls[hidden] { display: none; }
+    .timeline-wrap {
+      display: grid;
+      grid-template-columns: auto minmax(0,1fr) auto;
+      align-items: center;
+      gap: .55rem;
+      margin-top: .6rem;
+    }
+    .timeline-wrap span { color: var(--muted); font-size: .65rem; font-weight: 800; }
+
+    .below {
+      max-width: 1260px;
+      margin: 2.5rem auto 0;
+    }
+    .below section { scroll-margin-top: 1rem; }
+    .section-heading { margin: 0; color: var(--forest); font-size: clamp(1.35rem, 3vw, 2.05rem); letter-spacing: -.025em; }
+    .section-intro { max-width: 840px; margin: .55rem 0 1.1rem; color: var(--muted); }
+    .card-grid { display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 1rem; }
+    .info-card {
+      padding: 1rem;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: rgba(255,253,247,.88);
+    }
+    .info-card h3 { margin: 0; color: var(--forest); font-size: 1rem; }
+    .info-card p { margin: .45rem 0 0; color: var(--muted); font-size: .88rem; }
+    .info-card ul { margin: .55rem 0 0; padding-left: 1.15rem; color: var(--muted); font-size: .85rem; }
+    .section-block { margin-top: 2.7rem; }
+    .experiment-grid { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 1rem; }
+    .experiment {
+      padding: 1rem;
+      border: 1px solid rgba(24,59,43,.16);
+      border-radius: 16px;
+      background: #eef4eb;
+    }
+    .experiment b { color: var(--forest); }
+    .experiment ol { margin: .5rem 0 0; padding-left: 1.2rem; color: #52645a; font-size: .87rem; }
+    .water-diagram {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0,1fr));
+      gap: .75rem;
+      margin-top: 1rem;
+    }
+    .water-node { padding: .85rem; border: 1px solid #bcd1d8; border-radius: 14px; background: #edf8fb; }
+    .water-node strong { color: var(--water-dark); }
+    .water-node p { margin: .3rem 0 0; color: #52707a; font-size: .84rem; }
+    .source-list { display: grid; gap: .6rem; padding: 0; list-style: none; }
+    .source-list li { padding: .75rem .85rem; border: 1px solid var(--border); border-radius: 12px; background: #fff; }
+    .source-list a { font-weight: 800; text-decoration-thickness: 1px; text-underline-offset: 3px; }
+    .source-list span { display: block; margin-top: .2rem; color: var(--muted); font-size: .8rem; }
+    .notice {
+      margin-top: 1rem;
+      padding: .9rem 1rem;
+      border: 1px solid #e1cc9d;
+      border-radius: 14px;
+      background: #fff7df;
+      color: #5e4a20;
+      font-size: .88rem;
+    }
+
+    dialog {
+      width: min(1000px, calc(100% - 2rem));
+      max-height: calc(100vh - 2rem);
+      overflow: auto;
+      padding: 0;
+      border: 0;
+      border-radius: 20px;
+      background: var(--paper);
+      color: var(--ink);
+      box-shadow: 0 28px 90px rgba(0,0,0,.34);
+    }
+    dialog::backdrop { background: rgba(10,25,17,.62); backdrop-filter: blur(3px); }
+    .dialog-header {
+      position: sticky;
+      top: 0;
+      z-index: 2;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 1rem;
+      padding: .9rem 1rem;
+      border-bottom: 1px solid var(--border);
+      background: rgba(255,253,247,.96);
+    }
+    .dialog-header h2 { margin: 0; color: var(--forest); font-size: 1.1rem; }
+    .dialog-body { padding: 1rem; }
+    .compare-grid { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 1rem; }
+    .compare-panel { min-width: 0; }
+    .compare-panel h3 { margin: 0 0 .5rem; color: var(--forest); }
+    .compare-panel canvas { display: block; width: 100%; height: auto; aspect-ratio: 1; border: 1px solid var(--border); border-radius: 14px; image-rendering: pixelated; }
+    .compare-table { width: 100%; margin-top: 1rem; border-collapse: collapse; font-size: .84rem; }
+    .compare-table th, .compare-table td { padding: .55rem; border-bottom: 1px solid var(--border); text-align: right; }
+    .compare-table th:first-child, .compare-table td:first-child { text-align: left; }
+
+    .toast {
+      position: fixed;
+      z-index: 50;
+      left: 50%;
+      bottom: 1rem;
+      transform: translateX(-50%) translateY(1rem);
+      max-width: calc(100% - 2rem);
+      padding: .65rem .9rem;
+      border-radius: 10px;
+      background: rgba(24,59,43,.95);
+      color: #fff;
+      font-size: .8rem;
+      font-weight: 750;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity .18s ease, transform .18s ease;
+    }
+    .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+
+    footer { max-width: 1260px; margin: 2.8rem auto 0; padding: 1.2rem 0; border-top: 1px solid var(--border); color: var(--muted); font-size: .8rem; }
+
+    @media (max-width: 1050px) {
+      .explorer-main { grid-template-columns: 1fr; }
+      .sidebar { max-height: none; border-left: 0; border-top: 1px solid var(--border); }
+      .sidebar { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); }
+      .side-section { border-right: 1px solid var(--border); }
+      .card-grid { grid-template-columns: repeat(2, minmax(0,1fr)); }
+    }
+    @media (max-width: 720px) {
+      .site-header { align-items: flex-start; }
+      .version-pill { display: none; }
+      main { padding-left: .35rem; padding-right: .35rem; }
+      .explorer { border-radius: 17px; }
+      .map-column { padding: .38rem; }
+      .canvas-frame { border-radius: 11px; }
+      .map-badge { font-size: .62rem; }
+      .process-key { max-width: 190px; font-size: .58rem; }
+      .sidebar { display: block; }
+      .side-section { border-right: 0; }
+      .card-grid, .experiment-grid, .water-diagram, .compare-grid { grid-template-columns: 1fr; }
+      .map-toolbar .button { flex: 1 1 calc(50% - .45rem); }
+      .toolbar-spacer { display: none; }
+      .onboarding { top: 2.75rem; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { scroll-behavior: auto !important; transition-duration: .001ms !important; animation-duration: .001ms !important; }
+    }
+    @media print {
+      .explorer, .site-header, .button, dialog, .toast { box-shadow: none !important; }
+      .explorer { break-inside: avoid; }
+      .sidebar { max-height: none; overflow: visible; }
+    }
+  </style>
+</head>
+<body>
+  <a class="skip-link" href="#explorer">Skip to explorer</a>
+
+  <header class="site-header">
+    <div>
+      <div class="brand-kicker">Glass Root Garden · Interactive Ecology</div>
+      <h1>Central Texas Landscape Explorer</h1>
+      <p>Explore how water, fire, grazing, development, fragmentation, invasive species, and restoration shape a San Marcos–Kyle inspired landscape.</p>
+    </div>
+    <div class="version-pill">Public release 1.0</div>
+  </header>
+
+  <main>
+    <section class="explorer" id="explorer" aria-label="Central Texas Landscape Explorer simulation">
+      <nav class="era-bar" aria-label="Landscape time periods" role="tablist">
+        <button class="era-button" type="button" role="tab" aria-selected="true" data-era="historic">Pre-European</button>
+        <button class="era-button" type="button" role="tab" aria-selected="false" data-era="settlement">Settlement 1850–1950</button>
+        <button class="era-button" type="button" role="tab" aria-selected="false" data-era="modern">Modern</button>
+        <button class="era-button" type="button" role="tab" aria-selected="false" data-era="restoration">Restoration Future</button>
+        <button class="era-button" type="button" role="tab" aria-selected="false" data-era="custom">Build Your Own Future</button>
+      </nav>
+
+      <div class="explorer-main">
+        <div class="map-column">
+          <div class="canvas-frame" id="canvasFrame">
+            <canvas id="landscapeCanvas" width="720" height="720" role="img" aria-label="Animated conceptual landscape map of the San Marcos–Kyle corridor"></canvas>
+            <div class="map-badge" id="mapBadge">Pre-European ecological baseline · regionally inspired, not a literal map</div>
+            <div class="process-key" id="processKey" hidden></div>
+
+            <aside class="onboarding" id="onboarding" aria-live="polite">
+              <div class="onboarding-step" id="onboardingStep">Step 1 of 3</div>
+              <h2 id="onboardingTitle">Choose a time period</h2>
+              <p id="onboardingText">Use the tabs above to compare the ecological baseline, settlement, modern development, and a restoration-focused future.</p>
+              <div class="onboarding-actions">
+                <button class="button ghost small" id="onboardingSkip" type="button">Skip</button>
+                <button class="button primary small" id="onboardingNext" type="button">Next</button>
+              </div>
+            </aside>
+          </div>
+
+          <div class="map-toolbar" aria-label="Map actions">
+            <button class="button primary" id="playButton" type="button">❚❚ Pause</button>
+            <button class="button" id="resetButton" type="button">↻ Reset era</button>
+            <button class="button" id="stormButton" type="button">☁ Add rainstorm</button>
+            <button class="button warn" id="igniteButton" type="button" aria-pressed="false">🔥 Ignite grass</button>
+            <span class="toolbar-spacer"></span>
+            <button class="button" id="whyButton" type="button">Why is it changing?</button>
+            <button class="button" id="compareButton" type="button">Compare eras</button>
+            <button class="button" id="snapshotButton" type="button">Download image</button>
+          </div>
+        </div>
+
+        <aside class="sidebar" aria-label="Explorer controls and live results">
+          <section class="side-section">
+            <div class="side-title-row">
+              <div>
+                <div class="time-label">Simulation time</div>
+                <div class="time-value"><span id="tickValue">0</span> ticks</div>
+              </div>
+              <span class="score-badge" id="eraShortLabel">Baseline</span>
+            </div>
+            <div class="control-grid">
+              <label class="field" style="margin:0">
+                <span class="range-label">Speed</span>
+                <select id="speedSelect" aria-label="Simulation speed">
+                  <option value="0.5">0.5×</option>
+                  <option value="1" selected>1×</option>
+                  <option value="2">2×</option>
+                  <option value="4">4×</option>
+                </select>
+              </label>
+              <label class="field" style="margin:0">
+                <span class="range-label">Process overlay</span>
+                <select id="overlaySelect" aria-label="Ecological process overlay">
+                  <option value="none">None</option>
+                  <option value="water">Water flow & runoff</option>
+                  <option value="fire">Fire pathways</option>
+                  <option value="grazing">Grazing intensity</option>
+                  <option value="seed">Seed dispersal</option>
+                  <option value="connectivity">Habitat connectivity</option>
+                  <option value="fragmentation">Fragmentation pressure</option>
+                  <option value="invasive">Invasive spread risk</option>
+                  <option value="restoration">Restoration influence</option>
+                </select>
+              </label>
+            </div>
+            <div class="timeline-wrap">
+              <span>Past</span>
+              <input id="timeline" type="range" min="0" max="4" step="1" value="0" aria-label="Move through landscape time periods">
+              <span>Future</span>
+            </div>
+          </section>
+
+          <section class="side-section">
+            <div class="side-title-row">
+              <h2>Active ecological drivers</h2>
+              <span class="score-badge" id="driverCount">3 on</span>
+            </div>
+            <div class="switch-row"><span>Migratory grazing</span><label class="switch"><input id="grazingToggle" type="checkbox" checked><span aria-hidden="true"></span></label></div>
+            <div class="switch-row"><span>Lightning fire</span><label class="switch"><input id="lightningToggle" type="checkbox" checked><span aria-hidden="true"></span></label></div>
+            <div class="switch-row"><span>Cultural / prescribed fire</span><label class="switch"><input id="managedFireToggle" type="checkbox" checked><span aria-hidden="true"></span></label></div>
+            <div class="switch-row"><span>Fire suppression</span><label class="switch"><input id="suppressionToggle" type="checkbox"><span aria-hidden="true"></span></label></div>
+            <div class="switch-row"><span>Invasive plant pressure</span><label class="switch"><input id="invasiveToggle" type="checkbox"><span aria-hidden="true"></span></label></div>
+          </section>
+
+          <section class="side-section custom-controls" id="customControls" hidden>
+            <h2>Build your own future</h2>
+            <p>Adjust land use and management. The same underlying terrain stays in place.</p>
+            <div class="field"><label class="range-label" for="urbanRange"><span>Urbanization</span><span class="range-value" id="urbanValue">55%</span></label><input id="urbanRange" type="range" min="0" max="100" value="55"></div>
+            <div class="field"><label class="range-label" for="roadRange"><span>Road density</span><span class="range-value" id="roadValue">55%</span></label><input id="roadRange" type="range" min="0" max="100" value="55"></div>
+            <div class="field"><label class="range-label" for="riparianRange"><span>Riparian protection</span><span class="range-value" id="riparianValue">50%</span></label><input id="riparianRange" type="range" min="0" max="100" value="50"></div>
+            <div class="field"><label class="range-label" for="nativeRange"><span>Native landscaping</span><span class="range-value" id="nativeValue">45%</span></label><input id="nativeRange" type="range" min="0" max="100" value="45"></div>
+            <div class="field"><label class="range-label" for="restorationRange"><span>Prairie restoration</span><span class="range-value" id="restorationValue">40%</span></label><input id="restorationRange" type="range" min="0" max="100" value="40"></div>
+            <div class="field"><label class="range-label" for="greenRange"><span>Green infrastructure</span><span class="range-value" id="greenValue">45%</span></label><input id="greenRange" type="range" min="0" max="100" value="45"></div>
+            <div class="field"><label class="range-label" for="crossingRange"><span>Wildlife connectivity</span><span class="range-value" id="crossingValue">45%</span></label><input id="crossingRange" type="range" min="0" max="100" value="45"></div>
+          </section>
+
+          <section class="side-section">
+            <div class="side-title-row"><h2>Live landscape</h2><span class="time-label">land cells</span></div>
+            <div class="stat-grid">
+              <div class="stat"><span>Native prairie</span><strong id="prairieStat">0%</strong></div>
+              <div class="stat"><span>Woody cover</span><strong id="woodyStat">0%</strong></div>
+              <div class="stat"><span>Impervious surface</span><strong id="imperviousStat">0%</strong></div>
+              <div class="stat"><span>Invasive cover</span><strong id="invasiveStat">0%</strong></div>
+              <div class="stat"><span>Riparian habitat intact</span><strong id="riparianStat">0%</strong></div>
+              <div class="stat"><span>Connected habitat</span><strong id="connectedStat">0%</strong></div>
+              <div class="stat"><span>Bare ground</span><strong id="bareStat">0%</strong></div>
+              <div class="stat"><span>Actively burning</span><strong id="burningStat">0%</strong></div>
+              <div class="stat wide"><span>Overall ecological condition</span><strong id="conditionStat">0 / 100</strong><div class="bar"><span id="conditionBar"></span></div></div>
+            </div>
+          </section>
+
+          <section class="side-section">
+            <div class="side-title-row"><h2>Ecosystem services</h2><span class="time-label">0–100</span></div>
+            <div class="service-list">
+              <div class="service-row"><span>Water infiltration</span><span class="score-badge" id="serviceInfiltration">0</span></div>
+              <div class="service-row"><span>Flood resilience</span><span class="score-badge" id="serviceFlood">0</span></div>
+              <div class="service-row"><span>Pollinator habitat</span><span class="score-badge" id="servicePollinator">0</span></div>
+              <div class="service-row"><span>Soil health</span><span class="score-badge" id="serviceSoil">0</span></div>
+              <div class="service-row"><span>Carbon storage</span><span class="score-badge" id="serviceCarbon">0</span></div>
+            </div>
+          </section>
+
+          <section class="side-section">
+            <div class="side-title-row"><h2>Wildlife response</h2><span class="time-label">habitat index</span></div>
+            <div class="species-list">
+              <div class="species-row"><span class="species-icon">🐦</span><span>Grassland birds</span><span class="score-badge" id="speciesBirds">0</span></div>
+              <div class="species-row"><span class="species-icon">🐝</span><span>Native bees</span><span class="score-badge" id="speciesBees">0</span></div>
+              <div class="species-row"><span class="species-icon">🐸</span><span>Amphibians</span><span class="score-badge" id="speciesAmphibians">0</span></div>
+              <div class="species-row"><span class="species-icon">🦇</span><span>Bats</span><span class="score-badge" id="speciesBats">0</span></div>
+              <div class="species-row"><span class="species-icon">🐍</span><span>Reptiles</span><span class="score-badge" id="speciesReptiles">0</span></div>
+            </div>
+          </section>
+
+          <section class="side-section">
+            <h2>What the landscape is showing</h2>
+            <div class="interpretation" id="interpretation">The baseline begins as connected prairie with woody vegetation concentrated around waterways, rocky uplands, and scattered motts.</div>
+          </section>
+        </aside>
+      </div>
+    </section>
+
+    <div class="below">
+      <section aria-labelledby="start-heading">
+        <h2 class="section-heading" id="start-heading">How to explore</h2>
+        <p class="section-intro">The map comes first so visitors can experiment immediately. These notes explain what each part represents after they have begun exploring.</p>
+        <div class="card-grid">
+          <article class="info-card"><h3>1. Change the era</h3><p>Move from the pre-European ecological baseline to settlement, modern development, restoration, or a custom future. Every era uses the same underlying hills, rivers, springs, and soils.</p></article>
+          <article class="info-card"><h3>2. Watch the drivers</h3><p>Fire, grazing, succession, disturbance, roads, and invasive plants change vegetation over time. Turn on an ecological-process overlay to reveal the invisible forces.</p></article>
+          <article class="info-card"><h3>3. Read the response</h3><p>Landscape cover, habitat connectivity, ecosystem services, and wildlife indexes respond together. Green-looking land is not always connected or ecologically functional.</p></article>
+        </div>
+      </section>
+
+      <section class="section-block" aria-labelledby="eras-heading">
+        <h2 class="section-heading" id="eras-heading">Five ways to view the same landscape</h2>
+        <p class="section-intro">This is not a literal reconstruction of any single year. Each era is a conceptual scenario that highlights major landscape processes.</p>
+        <div class="card-grid">
+          <article class="info-card"><h3>Pre-European baseline</h3><p>Connected prairie, spring-fed and rainfall-fed waterways, migratory grazing, lightning fire, and Indigenous land stewardship maintain a shifting prairie–savanna mosaic.</p></article>
+          <article class="info-card"><h3>Settlement, 1850–1950</h3><p>Fences, livestock, cropland, rail and road corridors, town growth, and reduced cultural burning begin fragmenting the disturbance system.</p></article>
+          <article class="info-card"><h3>Modern corridor</h3><p>An I-35-inspired transportation spine, subdivisions, commercial areas, turf, stormwater infrastructure, fire suppression, and disturbance-linked invasives reshape the watershed.</p></article>
+          <article class="info-card"><h3>Restoration future</h3><p>The built footprint remains, but prescribed fire, riparian protection, native landscaping, green stormwater infrastructure, and connected habitat improve function.</p></article>
+          <article class="info-card"><h3>Build your own future</h3><p>Adjust urbanization and road density alongside restoration, native landscaping, riparian protection, and green infrastructure to test tradeoffs.</p></article>
+          <article class="info-card"><h3>Compare eras</h3><p>Use the comparison window to place the ecological baseline beside the active era and compare land cover, connectivity, water function, and ecological condition.</p></article>
+        </div>
+      </section>
+
+      <section class="section-block" aria-labelledby="water-heading">
+        <h2 class="section-heading" id="water-heading">A San Marcos–Kyle inspired water system</h2>
+        <p class="section-intro">The water network is deliberately recognizable but schematic. It teaches the difference between spring-fed headwaters, a variable Hill Country river, urban creeks, and stormwater runoff without claiming GIS precision.</p>
+        <div class="water-diagram">
+          <article class="water-node"><strong>Blanco River</strong><p>Crosses from the western uplands, widens near the Balcones transition, turns south, and meets the San Marcos River downstream. Its flow is highly variable and can rise rapidly during storms.</p></article>
+          <article class="water-node"><strong>San Marcos Springs & River</strong><p>Spring Lake and a visible spring complex create dependable headwaters. Smaller urban creeks add stormwater before the river reaches the Blanco.</p></article>
+          <article class="water-node"><strong>Plum Creek corridor</strong><p>A separate Kyle-area drainage links neighborhoods, parks, open space, and agricultural land. In modern scenarios it carries runoff; in restoration scenarios it becomes a stronger green corridor.</p></article>
+        </div>
+      </section>
+
+      <section class="section-block" aria-labelledby="experiments-heading">
+        <h2 class="section-heading" id="experiments-heading">Guided experiments</h2>
+        <p class="section-intro">These short comparisons help visitors move beyond simply watching the animation.</p>
+        <div class="experiment-grid">
+          <article class="experiment"><b>Fire and woody encroachment</b><ol><li>Choose Pre-European and reset.</li><li>Turn off lightning and managed fire.</li><li>Run at 4× speed and watch woody cover.</li><li>Turn prescribed fire back on and compare.</li></ol></article>
+          <article class="experiment"><b>Green space versus connected habitat</b><ol><li>Choose Modern.</li><li>Turn on the habitat-connectivity overlay.</li><li>Notice isolated green fragments between roads.</li><li>Switch to Restoration Future and compare the connected-habitat score.</li></ol></article>
+          <article class="experiment"><b>Stormwater and riparian protection</b><ol><li>Choose Modern and select Water flow & runoff.</li><li>Add a rainstorm.</li><li>Watch runoff concentrate along pavement and channels.</li><li>Compare with Restoration Future.</li></ol></article>
+          <article class="experiment"><b>Build a resilient future</b><ol><li>Choose Build Your Own Future.</li><li>Keep urbanization high.</li><li>Increase native landscaping, riparian protection, and green infrastructure.</li><li>See which services recover even when development remains.</li></ol></article>
+        </div>
+      </section>
+
+      <section class="section-block" aria-labelledby="process-heading">
+        <h2 class="section-heading" id="process-heading">What the ecological-process overlays mean</h2>
+        <div class="card-grid">
+          <article class="info-card"><h3>Water flow & runoff</h3><p>Shows high infiltration on intact vegetated soils, concentrated runoff from impervious surfaces, and the filtering role of wetlands, rain gardens, and riparian buffers.</p></article>
+          <article class="info-card"><h3>Fire pathways</h3><p>Highlights continuous fuels, barriers, wet corridors, and suppression. Mature prairie carries fire much more readily than water, pavement, or heavily wooded riparian areas.</p></article>
+          <article class="info-card"><h3>Grazing intensity</h3><p>Shows where bison or livestock are currently concentrating. Grazing creates a moving patchwork of short grass, bare soil, wallows, and recovering vegetation.</p></article>
+          <article class="info-card"><h3>Seed dispersal</h3><p>Shows likely movement away from woody plants and invasive source areas. Roads, birds, waterways, disturbed edges, and connected habitat influence establishment.</p></article>
+          <article class="info-card"><h3>Connectivity & fragmentation</h3><p>Connected habitat is measured as the largest traversable native network. Roads and urban land divide it even when the total amount of green space appears similar.</p></article>
+          <article class="info-card"><h3>Restoration influence</h3><p>Highlights prairie reconstruction, native landscaping, riparian buffers, green infrastructure, protected remnants, and wildlife crossings.</p></article>
+        </div>
+      </section>
+
+      <section class="section-block" aria-labelledby="limits-heading">
+        <h2 class="section-heading" id="limits-heading">Model scope and limitations</h2>
+        <p class="section-intro">This explorer is designed to teach relationships, not predict a parcel, flood, species population, fire, or historical condition.</p>
+        <div class="notice"><strong>Important:</strong> The landscape is a conceptual, regionally inspired model. Locations, dates, rates, species responses, fire behavior, hydrology, and urban patterns are simplified. The wildlife values are habitat indexes—not population estimates. Do not use this tool for engineering, regulatory, emergency, archaeological, or land-management decisions without site-specific professional data.</div>
+      </section>
+
+      <section class="section-block" aria-labelledby="sources-heading">
+        <h2 class="section-heading" id="sources-heading">Geographic and educational references</h2>
+        <p class="section-intro">The model is self-contained and does not fetch live data. These public sources informed its regional framing and should be revisited when the explanatory text is substantially revised.</p>
+        <ul class="source-list">
+          <li><a href="https://www.sanmarcostx.gov/4134/About-the-Plan" target="_blank" rel="noopener">City of San Marcos — Upper San Marcos River Watershed overview</a><span>Spring Lake headwaters, stormwater creeks, growth, and watershed-protection context.</span></li>
+          <li><a href="https://www.sanmarcostx.gov/4588/Blanco-River" target="_blank" rel="noopener">City of San Marcos — Blanco River</a><span>Regional course, Balcones transition, variable flow, and downstream confluence context.</span></li>
+          <li><a href="https://www.springlakearchaeology.txst.edu/archaeology-of-spring-lake/location.html" target="_blank" rel="noopener">Texas State University — Spring Lake and San Marcos Springs</a><span>Spring Lake, artesian springs, Edwards Aquifer, and Balcones Escarpment context.</span></li>
+          <li><a href="https://www.cityofkyle.gov/living-here/parks-and-recreation/parks-and-trails/" target="_blank" rel="noopener">City of Kyle — Parks and trails</a><span>Plum Creek trail spine, neighborhood connections, parks, and open-space context.</span></li>
+          <li><a href="https://www.cityofkyle.gov/living-here/parks-and-recreation/conservation/" target="_blank" rel="noopener">City of Kyle — Conservation</a><span>Local science-based habitat, soil, water, native-plant, and resilience work.</span></li>
+        </ul>
+      </section>
+
+      <footer>
+        Central Texas Landscape Explorer · A conceptual educational model created for Glass Root Garden. Designed to remain functional as a static GitHub Pages site with no external JavaScript dependencies.
+      </footer>
+    </div>
+  </main>
+
+  <dialog id="whyDialog" aria-labelledby="whyDialogTitle">
+    <div class="dialog-header"><h2 id="whyDialogTitle">Why is the landscape changing?</h2><button class="button small" data-close-dialog="whyDialog" type="button">Close</button></div>
+    <div class="dialog-body">
+      <p id="whyLead"></p>
+      <div class="card-grid" id="whyCards"></div>
+    </div>
+  </dialog>
+
+  <dialog id="compareDialog" aria-labelledby="compareDialogTitle">
+    <div class="dialog-header"><h2 id="compareDialogTitle">Compare the ecological baseline with the active era</h2><button class="button small" data-close-dialog="compareDialog" type="button">Close</button></div>
+    <div class="dialog-body">
+      <div class="compare-grid">
+        <section class="compare-panel"><h3>Pre-European baseline</h3><canvas id="historicCompareCanvas" width="480" height="480" aria-label="Static pre-European comparison map"></canvas></section>
+        <section class="compare-panel"><h3 id="currentCompareHeading">Current era</h3><canvas id="currentCompareCanvas" width="480" height="480" aria-label="Static active-era comparison map"></canvas></section>
+      </div>
+      <table class="compare-table">
+        <thead><tr><th>Indicator</th><th>Baseline</th><th id="currentCompareColumn">Current</th></tr></thead>
+        <tbody id="compareTableBody"></tbody>
+      </table>
+    </div>
+  </dialog>
+
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+  <script>
+  (() => {
+    "use strict";
+
+    const GRID = 120;
+    const CELL = 6;
+    const SIZE = GRID * CELL;
+    const BASE_SEED = 73421;
+    const TICK_MS = 95;
+    const MAX_STEPS_PER_FRAME = 6;
+
+    const TERRAIN = Object.freeze({ PRAIRIE: 0, WATER: 1, ROCK: 2, WETLAND: 3, RIPARIAN: 4, SPRING: 5 });
+    const LAND = Object.freeze({ NATURAL: 0, AGRICULTURE: 1, TURF: 2, ROAD: 3, URBAN: 4, PARK: 5, STORMWATER: 6, RESTORED: 7 });
+    const VEG = Object.freeze({ BARE: 0, SPARSE: 1, GRASS: 2, SHRUB: 3, SAPLING: 4, TREE: 5, INVASIVE: 6, TURF: 7, CROP: 8 });
+
+    const ERA_ORDER = ["historic", "settlement", "modern", "restoration", "custom"];
+    const ERA_CONFIG = Object.freeze({
+      historic: {
+        title: "Pre-European ecological baseline", short: "Baseline", year: "Before 1850",
+        urban: 0, roads: 0, agriculture: 0, riparian: 100, native: 100, restoration: 0, green: 0, connectivity: 100,
+        grazing: true, lightning: true, managedFire: true, suppression: false, invasives: false,
+        grazingType: "bison", agentCount: 88, fireRate: 0.0030, lightningRate: 0.0010, suppressionFactor: 0.02,
+      },
+      settlement: {
+        title: "Settlement and agricultural conversion", short: "Settlement", year: "1850–1950",
+        urban: 12, roads: 20, agriculture: 45, riparian: 65, native: 35, restoration: 0, green: 0, connectivity: 35,
+        grazing: true, lightning: true, managedFire: false, suppression: true, invasives: true,
+        grazingType: "cattle", agentCount: 52, fireRate: 0.00045, lightningRate: 0.00075, suppressionFactor: 0.52,
+      },
+      modern: {
+        title: "Modern San Marcos–Kyle development corridor", short: "Modern", year: "Today",
+        urban: 68, roads: 72, agriculture: 28, riparian: 35, native: 18, restoration: 5, green: 18, connectivity: 5,
+        grazing: false, lightning: true, managedFire: false, suppression: true, invasives: true,
+        grazingType: "none", agentCount: 0, fireRate: 0.0001, lightningRate: 0.00035, suppressionFactor: 0.90,
+      },
+      restoration: {
+        title: "Restoration-focused future", short: "Restoration", year: "Possible future",
+        urban: 68, roads: 72, agriculture: 18, riparian: 82, native: 82, restoration: 78, green: 84, connectivity: 92,
+        grazing: false, lightning: true, managedFire: true, suppression: true, invasives: true,
+        grazingType: "none", agentCount: 0, fireRate: 0.0012, lightningRate: 0.00035, suppressionFactor: 0.48,
+      },
+      custom: {
+        title: "Build your own future", short: "Custom", year: "Your scenario",
+        urban: 55, roads: 55, agriculture: 20, riparian: 50, native: 45, restoration: 40, green: 45, connectivity: 10,
+        grazing: false, lightning: true, managedFire: true, suppression: true, invasives: true,
+        grazingType: "none", agentCount: 0, fireRate: 0.0008, lightningRate: 0.00035, suppressionFactor: 0.62,
+      },
+    });
+
+    const COLORS = Object.freeze({
+      prairieBare: "#bda772", prairieSparse: "#acb86a", prairieGrass: "#718d4f", shrub: "#496d3d",
+      sapling: "#315a36", tree: "#1d4a2d", riparianTree: "#174d3e", rock: "#a59d88", water: "#4d9db6",
+      waterDeep: "#29768e", spring: "#78d2dc", wetland: "#649b78", invasive: "#934f70", turf: "#75aa69",
+      crop: "#c5a85a", road: "#56595b", urban: "#b9b4aa", roof: "#8d8276", park: "#7fa46e",
+      stormwater: "#5d93a3", fire: "#ec6a2c", ember: "#ffd36a", restored: "#5f9c62",
+      agentBison: "#3a2418", agentCattle: "#f1ead9", fence: "#76644b", highway: "#383b3d",
+    });
+
+    const els = {};
+    const ids = [
+      "landscapeCanvas", "canvasFrame", "mapBadge", "processKey", "onboarding", "onboardingStep", "onboardingTitle", "onboardingText", "onboardingSkip", "onboardingNext",
+      "playButton", "resetButton", "stormButton", "igniteButton", "whyButton", "compareButton", "snapshotButton", "tickValue", "eraShortLabel", "speedSelect", "overlaySelect", "timeline",
+      "grazingToggle", "lightningToggle", "managedFireToggle", "suppressionToggle", "invasiveToggle", "driverCount", "customControls", "urbanRange", "roadRange", "riparianRange", "nativeRange", "restorationRange", "greenRange",
+      "urbanValue", "roadValue", "riparianValue", "nativeValue", "restorationValue", "greenValue", "crossingRange", "crossingValue", "prairieStat", "woodyStat", "imperviousStat", "invasiveStat", "riparianStat", "connectedStat", "bareStat", "burningStat", "conditionStat", "conditionBar",
+      "serviceInfiltration", "serviceFlood", "servicePollinator", "serviceSoil", "serviceCarbon", "speciesBirds", "speciesBees", "speciesAmphibians", "speciesBats", "speciesReptiles", "interpretation",
+      "whyDialog", "whyLead", "whyCards", "compareDialog", "historicCompareCanvas", "currentCompareCanvas", "currentCompareHeading", "currentCompareColumn", "compareTableBody", "toast"
+    ];
+    ids.forEach(id => els[id] = document.getElementById(id));
+
+    let era = "historic";
+    let config = cloneConfig(ERA_CONFIG.historic);
+    let baseGrid = [];
+    let grid = [];
+    let agents = [];
+    let herds = [];
+    let tick = 0;
+    let running = true;
+    let speed = 1;
+    let overlay = "none";
+    let igniteMode = false;
+    let accumulated = 0;
+    let previousTime = performance.now();
+    let lastDraw = 0;
+    let dirty = true;
+    let stormPulse = 0;
+    let stats = emptyStats();
+    let connectivityCache = null;
+    let toastTimer = null;
+    let onboardingIndex = 0;
+    let selectedSeed = BASE_SEED;
+
+    const canvas = els.landscapeCanvas;
+    const ctx = canvas.getContext("2d", { alpha: false });
+    ctx.imageSmoothingEnabled = false;
+
+    function cloneConfig(source) { return JSON.parse(JSON.stringify(source)); }
+    function clamp(n, min, max) { return Math.max(min, Math.min(max, n)); }
+    function inside(x, y) { return x >= 0 && x < GRID && y >= 0 && y < GRID; }
+    function index(x, y) { return y * GRID + x; }
+    function mulberry32(seed) {
+      let a = seed >>> 0;
+      return () => {
+        a |= 0; a = a + 0x6D2B79F5 | 0;
+        let t = Math.imul(a ^ a >>> 15, 1 | a);
+        t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+        return ((t ^ t >>> 14) >>> 0) / 4294967296;
+      };
+    }
+    function hashNoise(x, y, seed = selectedSeed) {
+      let n = Math.imul(x + 374761393, 668265263) ^ Math.imul(y + 1442695041, 2246822519) ^ seed;
+      n = Math.imul(n ^ (n >>> 13), 1274126177);
+      return ((n ^ (n >>> 16)) >>> 0) / 4294967295;
+    }
+    function smoothNoise(x, y) {
+      const x0 = Math.floor(x), y0 = Math.floor(y), fx = x - x0, fy = y - y0;
+      const s = fx * fx * (3 - 2 * fx), t = fy * fy * (3 - 2 * fy);
+      const a = hashNoise(x0, y0), b = hashNoise(x0 + 1, y0), c = hashNoise(x0, y0 + 1), d = hashNoise(x0 + 1, y0 + 1);
+      return (a * (1 - s) + b * s) * (1 - t) + (c * (1 - s) + d * s) * t;
+    }
+    function distanceToSegment(px, py, ax, ay, bx, by) {
+      const dx = bx - ax, dy = by - ay;
+      if (dx === 0 && dy === 0) return Math.hypot(px - ax, py - ay);
+      const t = clamp(((px - ax) * dx + (py - ay) * dy) / (dx * dx + dy * dy), 0, 1);
+      return Math.hypot(px - (ax + t * dx), py - (ay + t * dy));
+    }
+    function distanceToPolyline(x, y, points) {
+      let best = Infinity;
+      for (let i = 0; i < points.length - 1; i++) best = Math.min(best, distanceToSegment(x, y, points[i][0], points[i][1], points[i + 1][0], points[i + 1][1]));
+      return best;
+    }
+    function ellipseDistance(x, y, cx, cy, rx, ry) { return Math.sqrt(((x - cx) / rx) ** 2 + ((y - cy) / ry) ** 2); }
+    function pct(value, total) { return total ? Math.round(value / total * 100) : 0; }
+    function emptyStats() {
+      return {
+        prairie: 0, woody: 0, impervious: 0, invasive: 0, riparian: 0, connected: 0, condition: 0, bare: 0, burning: 0,
+        services: { infiltration: 0, flood: 0, pollinator: 0, soil: 0, carbon: 0 },
+        species: { birds: 0, bees: 0, amphibians: 0, bats: 0, reptiles: 0 }
+      };
+    }
+
+    const WATERWAYS = Object.freeze({
+      blanco: [[-4, 23], [12, 25], [28, 28], [44, 32], [57, 39], [66, 52], [68, 68], [70, 84], [71, 94]],
+      sanMarcos: [[54, 77], [56, 82], [60, 87], [66, 91], [71, 94], [83, 101], [101, 106], [124, 110]],
+      plum: [[72, -4], [76, 10], [82, 22], [89, 34], [96, 46], [107, 57], [124, 64]],
+      purgatory: [[28, 98], [36, 93], [45, 90], [54, 88], [60, 87]],
+      sessom: [[39, 66], [45, 69], [50, 73], [54, 77]],
+      sink: [[45, 52], [49, 61], [52, 69], [54, 77]],
+    });
+
+    function makeCell(x, y) {
+      return {
+        x, y, terrain: TERRAIN.PRAIRIE, land: LAND.NATURAL, veg: VEG.GRASS, initialVeg: VEG.GRASS,
+        moisture: 0.35, elevation: 0, riparianPotential: 0, stream: "", onFire: 0, fireAge: 0, saplingAge: 0,
+        urbanPressure: 0, edgePressure: 0, restoration: 0, runoff: 0, infiltration: 0, seedRisk: 0, invasiveRisk: 0,
+        protected: false, corridor: false, crossing: false, bridge: false, roadDistance: 99, developmentScore: 0,
+      };
+    }
+
+    function generateBaseGrid(seed) {
+      selectedSeed = seed;
+      const rng = mulberry32(seed);
+      const result = new Array(GRID);
+      const rockPatches = [];
+      const motts = [];
+      const gilgai = [];
+      for (let i = 0; i < 34; i++) rockPatches.push({ x: rng() * 42, y: rng() * GRID, r: 2.8 + rng() * 7.5 });
+      for (let i = 0; i < 8; i++) motts.push({ x: 17 + rng() * 70, y: 8 + rng() * 102, r: 3 + rng() * 5 });
+      for (let i = 0; i < 24; i++) gilgai.push({ x: 72 + rng() * 44, y: 4 + rng() * 110, r: 1 + rng() * 2.2 });
+
+      for (let y = 0; y < GRID; y++) {
+        const row = new Array(GRID);
+        for (let x = 0; x < GRID; x++) {
+          const cell = makeCell(x, y);
+          const westHigh = 1 - x / (GRID - 1);
+          const terrainNoise = smoothNoise(x / 13, y / 13) * .68 + smoothNoise(x / 31 + 10, y / 31 + 10) * .32;
+          cell.elevation = clamp(westHigh * .72 + terrainNoise * .28, 0, 1);
+
+          const dBlanco = distanceToPolyline(x, y, WATERWAYS.blanco);
+          const dSan = distanceToPolyline(x, y, WATERWAYS.sanMarcos);
+          const dPlum = distanceToPolyline(x, y, WATERWAYS.plum);
+          const dPurg = distanceToPolyline(x, y, WATERWAYS.purgatory);
+          const dSessom = distanceToPolyline(x, y, WATERWAYS.sessom);
+          const dSink = distanceToPolyline(x, y, WATERWAYS.sink);
+          const dLake = ellipseDistance(x, y, 53.5, 76.5, 4.2, 3.2);
+          const nearestPermanent = Math.min(dBlanco, dSan, dLake * 3.2);
+          const nearestCreek = Math.min(dPlum, dPurg, dSessom, dSink);
+
+          if (dLake <= 1) {
+            cell.terrain = dLake < .38 ? TERRAIN.SPRING : TERRAIN.WATER;
+            cell.stream = "San Marcos Springs / Spring Lake";
+          } else if (dBlanco <= 2.15 + Math.sin(y / 11) * .25) {
+            cell.terrain = TERRAIN.WATER; cell.stream = "Blanco River";
+          } else if (dSan <= 1.7 + Math.sin(x / 9) * .18) {
+            cell.terrain = TERRAIN.WATER; cell.stream = "San Marcos River";
+          } else if (dPlum <= 1.25 || dPurg <= .85 || dSessom <= .65 || dSink <= .65) {
+            cell.terrain = TERRAIN.WATER;
+            cell.stream = dPlum <= 1.25 ? "Plum Creek" : dPurg <= .85 ? "Purgatory Creek" : dSessom <= .65 ? "Sessom Creek" : "Sink Creek";
+          } else if (nearestPermanent <= 5.7 || nearestCreek <= 3.7) {
+            cell.terrain = TERRAIN.RIPARIAN;
+            cell.riparianPotential = clamp(1 - Math.min(nearestPermanent / 6, nearestCreek / 4), 0, 1);
+          }
+
+          if (cell.terrain === TERRAIN.PRAIRIE && x < 48) {
+            let rockInfluence = 0;
+            for (const p of rockPatches) rockInfluence = Math.max(rockInfluence, 1 - Math.hypot(x - p.x, y - p.y) / p.r);
+            if (rockInfluence > .2 || (westHigh > .62 && terrainNoise > .68)) cell.terrain = TERRAIN.ROCK;
+          }
+
+          if (cell.terrain === TERRAIN.PRAIRIE && x > 66) {
+            for (const p of gilgai) {
+              if (Math.hypot(x - p.x, y - p.y) < p.r) { cell.terrain = TERRAIN.WETLAND; break; }
+            }
+          }
+
+          const moistureBase = cell.terrain === TERRAIN.WATER || cell.terrain === TERRAIN.SPRING ? 1 :
+            cell.terrain === TERRAIN.WETLAND ? .78 : cell.terrain === TERRAIN.RIPARIAN ? .68 : cell.terrain === TERRAIN.ROCK ? .22 : .38;
+          cell.moisture = clamp(moistureBase + (terrainNoise - .5) * .16, 0, 1);
+
+          if (cell.terrain === TERRAIN.WATER || cell.terrain === TERRAIN.SPRING) cell.veg = VEG.BARE;
+          else if (cell.terrain === TERRAIN.RIPARIAN) cell.veg = rng() < .7 ? VEG.TREE : rng() < .65 ? VEG.SHRUB : VEG.GRASS;
+          else if (cell.terrain === TERRAIN.ROCK) cell.veg = rng() < .34 ? VEG.TREE : rng() < .28 ? VEG.SHRUB : VEG.SPARSE;
+          else if (cell.terrain === TERRAIN.WETLAND) cell.veg = rng() < .12 ? VEG.SHRUB : VEG.GRASS;
+          else cell.veg = rng() < .84 ? VEG.GRASS : rng() < .65 ? VEG.SPARSE : VEG.SHRUB;
+
+          if (cell.terrain === TERRAIN.PRAIRIE || cell.terrain === TERRAIN.ROCK) {
+            for (const p of motts) {
+              const d = Math.hypot(x - p.x, y - p.y);
+              if (d < p.r && rng() < .77) { cell.veg = d < p.r * .56 ? VEG.TREE : VEG.SHRUB; break; }
+            }
+          }
+          cell.initialVeg = cell.veg;
+          row[x] = cell;
+        }
+        result[y] = row;
+      }
+      return result;
+    }
+
+    function copyBaseGrid() {
+      return baseGrid.map(row => row.map(cell => ({ ...cell, onFire: 0, fireAge: 0, saplingAge: 0, land: LAND.NATURAL, restoration: 0, urbanPressure: 0, edgePressure: 0, runoff: 0, infiltration: 0, seedRisk: 0, invasiveRisk: 0, protected: false, corridor: false, crossing: false, bridge: false, roadDistance: 99, developmentScore: 0 })));
+    }
+
+    function roadCenterX(y) { return 69 + Math.sin(y / 24) * 1.8 + (y > 72 ? 1.5 : 0); }
+    function roadDistance(x, y) { return Math.abs(x - roadCenterX(y)); }
+
+    function pointInRoundedRect(x, y, cx, cy, rx, ry, softness = 0) {
+      const dx = Math.abs(x - cx) / rx, dy = Math.abs(y - cy) / ry;
+      const score = dx * dx + dy * dy;
+      return score <= 1 + softness;
+    }
+
+    function applyScenario(targetGrid, activeConfig, activeEra, rng) {
+      const urbanScale = activeConfig.urban / 100;
+      const roadScale = activeConfig.roads / 100;
+      const agScale = activeConfig.agriculture / 100;
+      const riparianProtection = activeConfig.riparian / 100;
+      const developmentRiparianProtection = activeEra === "restoration" ? ERA_CONFIG.modern.riparian / 100 : riparianProtection;
+      const nativeShare = activeConfig.native / 100;
+      const restorationShare = activeConfig.restoration / 100;
+      const greenShare = activeConfig.green / 100;
+      const wildlifeConnectivity = (activeConfig.connectivity ?? 0) / 100;
+
+      const urbanNodes = [
+        { x: 73, y: 27, rx: 17, ry: 14, threshold: .18, name: "Kyle" },
+        { x: 72, y: 76, rx: 20, ry: 18, threshold: .1, name: "San Marcos" },
+        { x: 92, y: 30, rx: 18, ry: 10, threshold: .37, name: "East Kyle growth" },
+        { x: 92, y: 80, rx: 22, ry: 13, threshold: .43, name: "East San Marcos growth" },
+      ];
+      const commercialNodes = [
+        { x: 70, y: 25, rx: 7, ry: 9 }, { x: 70, y: 52, rx: 6, ry: 8 }, { x: 72, y: 75, rx: 8, ry: 10 }, { x: 78, y: 87, rx: 9, ry: 8 }
+      ];
+      const parks = [
+        { x: 88, y: 46, rx: 8, ry: 5, name: "Plum Creek open-space corridor" },
+        { x: 49, y: 70, rx: 9, ry: 8, name: "Spring Lake natural area" },
+        { x: 79, y: 99, rx: 9, ry: 5, name: "River park corridor" },
+        { x: 42, y: 86, rx: 7, ry: 5, name: "Purgatory natural area" },
+      ];
+      const agFields = [
+        { x: 100, y: 16, rx: 16, ry: 10 }, { x: 101, y: 70, rx: 17, ry: 13 }, { x: 39, y: 45, rx: 11, ry: 9 },
+        { x: 26, y: 64, rx: 13, ry: 10 }, { x: 94, y: 102, rx: 18, ry: 9 },
+      ];
+      const stormPonds = [
+        { x: 82, y: 23, rx: 2.8, ry: 2 }, { x: 84, y: 55, rx: 2.6, ry: 1.8 }, { x: 86, y: 77, rx: 3.4, ry: 2.2 },
+        { x: 100, y: 39, rx: 2.6, ry: 1.7 }, { x: 98, y: 89, rx: 3.1, ry: 2.1 }
+      ];
+
+      for (let y = 0; y < GRID; y++) {
+        for (let x = 0; x < GRID; x++) {
+          const c = targetGrid[y][x];
+          const dRoad = roadDistance(x, y);
+          if (c.terrain === TERRAIN.WATER || c.terrain === TERRAIN.SPRING) {
+            if (["modern", "restoration", "custom"].includes(activeEra)) {
+              const bridgeWidth = 1.15 + roadScale * 1.4;
+              if (dRoad <= bridgeWidth + 1.4 * roadScale) c.bridge = true;
+            }
+            continue;
+          }
+          c.roadDistance = dRoad;
+          const fixedNoise = hashNoise(x, y, selectedSeed + 9901);
+          const blockNoise = smoothNoise(x / 5 + 33, y / 5 + 77);
+
+          if (activeEra === "historic") {
+            c.protected = true;
+            c.infiltration = terrainInfiltration(c);
+            continue;
+          }
+
+          if (activeEra === "settlement") {
+            const wagonRoad = Math.abs(x - (67 + Math.sin(y / 28))) < .75 && roadScale > .08;
+            const rail = Math.abs(x - 73) < .45 && y > 8 && roadScale > .12;
+            if (wagonRoad || rail) { c.land = LAND.ROAD; c.veg = VEG.BARE; }
+            else {
+              for (const f of agFields) {
+                if (pointInRoundedRect(x, y, f.x, f.y, f.rx, f.ry) && fixedNoise < agScale * .92 && c.terrain !== TERRAIN.RIPARIAN && c.terrain !== TERRAIN.ROCK) {
+                  c.land = LAND.AGRICULTURE; c.veg = fixedNoise < .2 ? VEG.BARE : VEG.CROP; break;
+                }
+              }
+              const town = pointInRoundedRect(x, y, 70, 77, 5, 5) || pointInRoundedRect(x, y, 72, 27, 3.2, 3.2);
+              if (town && fixedNoise < urbanScale * 1.4) { c.land = fixedNoise < .28 ? LAND.ROAD : LAND.URBAN; c.veg = VEG.BARE; }
+              if (c.terrain === TERRAIN.RIPARIAN && fixedNoise > riparianProtection) { c.terrain = TERRAIN.PRAIRIE; c.riparianPotential *= .25; }
+            }
+            continue;
+          }
+
+          const highwayWidth = 1.15 + roadScale * 1.4;
+          const frontage = dRoad > highwayWidth && dRoad < highwayWidth + 2.2 * roadScale;
+          if (dRoad <= highwayWidth || (frontage && fixedNoise < roadScale * .74)) {
+            c.land = LAND.ROAD; c.veg = VEG.BARE; continue;
+          }
+
+          const crossRoadA = Math.abs(y - 28) < .75 && x > 47 && roadScale > .3;
+          const crossRoadB = Math.abs(y - 75) < .8 && x > 39 && roadScale > .3;
+          const crossRoadC = Math.abs(y - (51 + Math.sin(x / 9) * 1.3)) < .6 && x > 55 && roadScale > .55;
+          if ((crossRoadA || crossRoadB || crossRoadC) && fixedNoise < roadScale) { c.land = LAND.ROAD; c.veg = VEG.BARE; continue; }
+
+          let isUrban = false;
+          let urbanIntensity = 0;
+          for (const node of urbanNodes) {
+            const dx = (x - node.x) / node.rx, dy = (y - node.y) / node.ry;
+            const d = dx * dx + dy * dy;
+            const intensity = clamp(1 - d, 0, 1) * (.55 + blockNoise * .6);
+            if (intensity > node.threshold && fixedNoise < urbanScale * intensity * 1.55) { isUrban = true; urbanIntensity = Math.max(urbanIntensity, intensity); }
+          }
+
+          let commercial = false;
+          for (const node of commercialNodes) {
+            if (pointInRoundedRect(x, y, node.x, node.y, node.rx, node.ry) && dRoad < 11 && fixedNoise < urbanScale * .9) { commercial = true; break; }
+          }
+
+          let parkMatch = null;
+          for (const p of parks) if (pointInRoundedRect(x, y, p.x, p.y, p.rx, p.ry)) { parkMatch = p; break; }
+          const nearWater = c.terrain === TERRAIN.RIPARIAN || c.terrain === TERRAIN.WETLAND;
+          const protectedRiparian = nearWater && fixedNoise < developmentRiparianProtection;
+
+          if (parkMatch && fixedNoise < .82 + greenShare * .18) {
+            c.land = restorationShare > .35 && fixedNoise < restorationShare ? LAND.RESTORED : LAND.PARK;
+            c.protected = true;
+            c.corridor = true;
+          } else if (protectedRiparian) {
+            c.land = restorationShare > .45 && fixedNoise < restorationShare ? LAND.RESTORED : LAND.PARK;
+            c.protected = true;
+            c.corridor = true;
+          } else if (commercial || isUrban) {
+            const keepGreen = fixedNoise > urbanScale;
+            if (keepGreen) {
+              c.land = fixedNoise < nativeShare ? LAND.RESTORED : LAND.TURF;
+              c.veg = c.land === LAND.RESTORED ? (fixedNoise < .7 ? VEG.GRASS : VEG.SHRUB) : VEG.TURF;
+              c.restoration = c.land === LAND.RESTORED ? .8 : 0;
+            } else {
+              c.land = fixedNoise < .14 + urbanIntensity * .22 ? LAND.ROAD : LAND.URBAN;
+              c.veg = VEG.BARE;
+              c.urbanPressure = clamp(.5 + urbanIntensity, 0, 1);
+            }
+          } else {
+            let becameAg = false;
+            for (const f of agFields) {
+              if (pointInRoundedRect(x, y, f.x, f.y, f.rx, f.ry) && fixedNoise < agScale && c.terrain !== TERRAIN.ROCK && !protectedRiparian) {
+                c.land = LAND.AGRICULTURE; c.veg = fixedNoise < .16 ? VEG.BARE : VEG.CROP; becameAg = true; break;
+              }
+            }
+            if (!becameAg && activeEra === "restoration" && fixedNoise < restorationShare * .31 && c.terrain === TERRAIN.PRAIRIE) {
+              c.land = LAND.RESTORED; c.veg = fixedNoise < .88 ? VEG.GRASS : VEG.SHRUB; c.restoration = .75; c.corridor = true;
+            }
+          }
+
+          if (activeEra !== "settlement" && greenShare > .15) {
+            for (const pond of stormPonds) {
+              if (ellipseDistance(x, y, pond.x, pond.y, pond.rx, pond.ry) <= 1 && fixedNoise < .55 + greenShare * .4) {
+                c.land = LAND.STORMWATER; c.veg = VEG.BARE; c.moisture = .92; c.protected = true; break;
+              }
+            }
+          }
+        }
+      }
+
+      addNeighborhoodRoads(targetGrid, roadScale, urbanScale, activeEra);
+      applyRestorationNetwork(targetGrid, restorationShare, greenShare, wildlifeConnectivity, activeEra);
+      calculatePressures(targetGrid, activeConfig);
+      seedInitialInvasives(targetGrid, activeConfig, rng);
+      normalizeVegetationForLandUse(targetGrid, activeConfig, rng);
+    }
+
+    function addNeighborhoodRoads(targetGrid, roadScale, urbanScale, activeEra) {
+      if (activeEra === "historic" || roadScale < .12) return;
+      const corridors = [
+        { x0: 72, y0: 16, x1: 105, y1: 16 }, { x0: 74, y0: 37, x1: 108, y1: 41 },
+        { x0: 73, y0: 66, x1: 105, y1: 63 }, { x0: 73, y0: 87, x1: 111, y1: 91 },
+        { x0: 83, y0: 12, x1: 86, y1: 48 }, { x0: 96, y0: 18, x1: 99, y1: 49 },
+        { x0: 86, y0: 59, x1: 88, y1: 104 }, { x0: 101, y0: 59, x1: 104, y1: 108 },
+      ];
+      for (const line of corridors) {
+        for (let y = 0; y < GRID; y++) for (let x = 0; x < GRID; x++) {
+          const c = targetGrid[y][x];
+          if (c.terrain === TERRAIN.WATER || c.terrain === TERRAIN.SPRING || c.protected) continue;
+          if (distanceToSegment(x, y, line.x0, line.y0, line.x1, line.y1) < .44 && hashNoise(x, y, selectedSeed + 56) < roadScale * urbanScale) {
+            c.land = LAND.ROAD; c.veg = VEG.BARE;
+          }
+        }
+      }
+    }
+
+    function applyRestorationNetwork(targetGrid, restorationShare, greenShare, wildlifeConnectivity, activeEra) {
+      if (activeEra !== "restoration" && activeEra !== "custom") return;
+      for (let y = 0; y < GRID; y++) for (let x = 0; x < GRID; x++) {
+        const c = targetGrid[y][x];
+        if (c.land === LAND.ROAD || c.land === LAND.URBAN || c.terrain === TERRAIN.WATER || c.terrain === TERRAIN.SPRING) continue;
+        const plumCorridor = distanceToPolyline(x, y, WATERWAYS.plum) < 5.5;
+        const sanCorridor = distanceToPolyline(x, y, WATERWAYS.sanMarcos) < 6.5;
+        const crossPrairie = Math.abs(y - (58 + Math.sin(x / 13) * 4)) < 2.2 && x > 42;
+        if ((plumCorridor || sanCorridor || crossPrairie) && hashNoise(x, y, selectedSeed + 818) < restorationShare * .76) {
+          c.land = LAND.RESTORED;
+          c.restoration = clamp(.65 + greenShare * .35, 0, 1);
+          c.corridor = true;
+          c.protected = true;
+          if (c.veg === VEG.TURF || c.veg === VEG.CROP || c.veg === VEG.BARE) c.veg = hashNoise(x,y,selectedSeed+21) < .82 ? VEG.GRASS : VEG.SHRUB;
+        }
+      }
+
+      const crossingStrength = wildlifeConnectivity;
+      if (crossingStrength > .15) {
+        const crossingRows = crossingStrength < .34 ? [61] : crossingStrength < .67 ? [35, 92] : [35, 61, 92];
+        for (const crossingY of crossingRows) {
+          const center = roadCenterX(crossingY);
+          for (let y = crossingY - 1; y <= crossingY + 1; y++) for (let x = Math.floor(center - 5); x <= Math.ceil(center + 5); x++) {
+            if (!inside(x,y)) continue;
+            const c = targetGrid[y][x];
+            c.crossing = true;
+            c.corridor = true;
+            c.restoration = 1;
+          }
+        }
+      }
+    }
+
+    function calculatePressures(targetGrid, activeConfig) {
+      const built = new Uint8Array(GRID * GRID);
+      for (let y = 0; y < GRID; y++) for (let x = 0; x < GRID; x++) {
+        const c = targetGrid[y][x];
+        if (c.land === LAND.ROAD || c.land === LAND.URBAN) built[index(x,y)] = 1;
+      }
+      for (let y = 0; y < GRID; y++) for (let x = 0; x < GRID; x++) {
+        const c = targetGrid[y][x];
+        let builtNear = 0, total = 0, nearest = 20;
+        for (let dy = -4; dy <= 4; dy++) for (let dx = -4; dx <= 4; dx++) {
+          const nx = x + dx, ny = y + dy;
+          if (!inside(nx,ny)) continue;
+          total++;
+          if (built[index(nx,ny)]) { builtNear++; nearest = Math.min(nearest, Math.hypot(dx,dy)); }
+        }
+        c.edgePressure = total ? builtNear / total : 0;
+        c.roadDistance = Math.min(c.roadDistance, nearest);
+        const impervious = c.land === LAND.ROAD || c.land === LAND.URBAN;
+        c.infiltration = impervious ? .03 : c.land === LAND.STORMWATER ? .68 + activeConfig.green / 250 : c.land === LAND.TURF ? .28 : c.land === LAND.AGRICULTURE ? .35 : terrainInfiltration(c) * (c.land === LAND.RESTORED ? 1.12 : 1);
+        c.infiltration = clamp(c.infiltration, 0, 1);
+        c.runoff = clamp((1 - c.infiltration) * (.35 + c.edgePressure * .9) + (impervious ? .55 : 0), 0, 1);
+        c.invasiveRisk = clamp((activeConfig.invasives ? .16 : 0) + c.edgePressure * .75 + (c.roadDistance < 3 ? .38 : 0) + (c.terrain === TERRAIN.RIPARIAN ? .14 : 0) - c.restoration * .55, 0, 1);
+        c.seedRisk = clamp(c.edgePressure * .18 + (c.terrain === TERRAIN.RIPARIAN ? .22 : 0) + (c.veg === VEG.GRASS ? .12 : 0), 0, 1);
+      }
+    }
+
+    function terrainInfiltration(c) {
+      if (c.terrain === TERRAIN.ROCK) return .24;
+      if (c.terrain === TERRAIN.WETLAND) return .86;
+      if (c.terrain === TERRAIN.RIPARIAN) return .78;
+      if (c.terrain === TERRAIN.PRAIRIE) return c.veg === VEG.GRASS ? .77 : c.veg === VEG.BARE ? .38 : .61;
+      return .2;
+    }
+
+    function seedInitialInvasives(targetGrid, activeConfig, rng) {
+      if (!activeConfig.invasives) return;
+      for (let y = 0; y < GRID; y++) for (let x = 0; x < GRID; x++) {
+        const c = targetGrid[y][x];
+        if (c.land === LAND.ROAD || c.land === LAND.URBAN || c.land === LAND.STORMWATER || c.terrain === TERRAIN.WATER || c.terrain === TERRAIN.SPRING) continue;
+        if (rng() < c.invasiveRisk * .035 && c.restoration < .55) c.veg = VEG.INVASIVE;
+      }
+    }
+
+    function normalizeVegetationForLandUse(targetGrid, activeConfig, rng) {
+      for (let y = 0; y < GRID; y++) for (let x = 0; x < GRID; x++) {
+        const c = targetGrid[y][x];
+        if (c.land === LAND.ROAD || c.land === LAND.URBAN || c.land === LAND.STORMWATER) c.veg = VEG.BARE;
+        else if (c.land === LAND.TURF) c.veg = activeConfig.native > 70 && rng() < .65 ? VEG.GRASS : VEG.TURF;
+        else if (c.land === LAND.AGRICULTURE && c.veg !== VEG.INVASIVE) c.veg = rng() < .12 ? VEG.BARE : VEG.CROP;
+        else if (c.land === LAND.RESTORED && (c.veg === VEG.TURF || c.veg === VEG.CROP || c.veg === VEG.BARE)) c.veg = rng() < .85 ? VEG.GRASS : VEG.SHRUB;
+        c.initialVeg = c.veg;
+      }
+    }
+
+    function initializeAgents(rng) {
+      agents = [];
+      herds = [];
+      if (!config.grazing || config.agentCount <= 0) return;
+      const herdCount = config.grazingType === "bison" ? 4 : 5;
+      for (let h = 0; h < herdCount; h++) {
+        const center = findNaturalPosition(rng, h);
+        const angle = rng() * Math.PI * 2;
+        herds.push({ x: center.x, y: center.y, vx: Math.cos(angle) * .16, vy: Math.sin(angle) * .16, turn: rng() * 100 });
+      }
+      for (let i = 0; i < config.agentCount; i++) {
+        const herd = herds[i % herds.length];
+        agents.push({
+          herd: i % herds.length, x: clamp(herd.x + (rng() - .5) * 7, 1, GRID - 2), y: clamp(herd.y + (rng() - .5) * 7, 1, GRID - 2),
+          vx: (rng() - .5) * .22, vy: (rng() - .5) * .22, grazeCooldown: Math.floor(rng() * 12)
+        });
+      }
+    }
+
+    function findNaturalPosition(rng, offset = 0) {
+      for (let attempt = 0; attempt < 500; attempt++) {
+        const x = 8 + rng() * (GRID - 16), y = 8 + rng() * (GRID - 16);
+        const c = grid[Math.floor(y)][Math.floor(x)];
+        if (c.land === LAND.NATURAL || c.land === LAND.RESTORED || c.land === LAND.PARK) {
+          if (c.terrain !== TERRAIN.WATER && c.terrain !== TERRAIN.SPRING && c.terrain !== TERRAIN.ROCK) return { x, y };
+        }
+      }
+      return { x: 18 + offset * 14, y: 18 + offset * 17 };
+    }
+
+    function resetScenario(announce = true) {
+      const rng = mulberry32(selectedSeed + ERA_ORDER.indexOf(era) * 10003 + Math.round(config.urban * 31 + config.restoration * 17));
+      grid = copyBaseGrid();
+      applyScenario(grid, config, era, rng);
+      initializeAgents(rng);
+      tick = 0;
+      stormPulse = 0;
+      accumulated = 0;
+      connectivityCache = null;
+      stats = calculateStats(grid);
+      updateUI();
+      dirty = true;
+      if (announce) showToast(`${ERA_CONFIG[era].short} scenario reset.`);
+    }
+
+    function setEra(nextEra, announce = true) {
+      if (!ERA_CONFIG[nextEra]) return;
+      era = nextEra;
+      config = cloneConfig(ERA_CONFIG[era]);
+      applyEraDefaultsToControls();
+      document.querySelectorAll(".era-button").forEach(btn => btn.setAttribute("aria-selected", String(btn.dataset.era === era)));
+      els.timeline.value = String(ERA_ORDER.indexOf(era));
+      els.customControls.hidden = era !== "custom";
+      els.mapBadge.textContent = `${config.title} · regionally inspired, not a literal map`;
+      els.eraShortLabel.textContent = config.short;
+      resetScenario(false);
+      if (announce) showToast(`${config.title} loaded.`);
+    }
+
+    function applyEraDefaultsToControls() {
+      els.grazingToggle.checked = config.grazing;
+      els.lightningToggle.checked = config.lightning;
+      els.managedFireToggle.checked = config.managedFire;
+      els.suppressionToggle.checked = config.suppression;
+      els.invasiveToggle.checked = config.invasives;
+      els.urbanRange.value = config.urban;
+      els.roadRange.value = config.roads;
+      els.riparianRange.value = config.riparian;
+      els.nativeRange.value = config.native;
+      els.restorationRange.value = config.restoration;
+      els.greenRange.value = config.green;
+      els.crossingRange.value = config.connectivity ?? 0;
+      updateRangeLabels();
+      updateDriverCount();
+    }
+
+    function updateRangeLabels() {
+      els.urbanValue.textContent = `${els.urbanRange.value}%`;
+      els.roadValue.textContent = `${els.roadRange.value}%`;
+      els.riparianValue.textContent = `${els.riparianRange.value}%`;
+      els.nativeValue.textContent = `${els.nativeRange.value}%`;
+      els.restorationValue.textContent = `${els.restorationRange.value}%`;
+      els.greenValue.textContent = `${els.greenRange.value}%`;
+      els.crossingValue.textContent = `${els.crossingRange.value}%`;
+    }
+
+    function updateDriverCount() {
+      const count = [els.grazingToggle, els.lightningToggle, els.managedFireToggle, els.suppressionToggle, els.invasiveToggle].filter(el => el.checked).length;
+      els.driverCount.textContent = `${count} on`;
+    }
+
+    function ecologicalStep() {
+      tick++;
+      if (stormPulse > 0) stormPulse--;
+      const rng = mulberry32(selectedSeed + tick * 8191 + ERA_ORDER.indexOf(era) * 97);
+      const nextChanges = [];
+
+      if (config.lightning && rng() < config.lightningRate) igniteRandom(rng, false);
+      if (config.managedFire && rng() < config.fireRate) igniteRandom(rng, true);
+
+      for (let y = 0; y < GRID; y++) {
+        for (let x = 0; x < GRID; x++) {
+          const c = grid[y][x];
+          if (c.terrain === TERRAIN.WATER || c.terrain === TERRAIN.SPRING || c.land === LAND.ROAD || c.land === LAND.URBAN || c.land === LAND.STORMWATER) continue;
+
+          if (c.onFire > 0) {
+            c.onFire--;
+            c.fireAge++;
+            if (c.onFire === 0) resolveFire(c, rng);
+            else spreadFire(x, y, c, rng, nextChanges);
+            continue;
+          }
+
+          const moisture = clamp(c.moisture + (stormPulse > 0 ? .3 : 0), 0, 1);
+          const restorationBoost = 1 + c.restoration * .9;
+          const disturbance = c.edgePressure + (c.land === LAND.AGRICULTURE ? .35 : 0);
+
+          if (c.veg === VEG.BARE) {
+            let regrow = .018 * restorationBoost * (0.55 + moisture);
+            if (c.land === LAND.AGRICULTURE) regrow *= .25;
+            if (rng() < regrow) c.veg = c.land === LAND.AGRICULTURE ? VEG.CROP : c.land === LAND.TURF ? VEG.TURF : VEG.SPARSE;
+          } else if (c.veg === VEG.SPARSE) {
+            if (rng() < .010 * restorationBoost * (0.55 + moisture)) c.veg = VEG.GRASS;
+          } else if (c.veg === VEG.GRASS) {
+            const fireSuppression = config.suppression ? config.suppressionFactor : 0;
+            const woodyChance = .00042 + fireSuppression * .0018 + c.edgePressure * .0008 - c.restoration * .00085;
+            if (rng() < woodyChance && c.terrain !== TERRAIN.WETLAND) c.veg = VEG.SHRUB;
+            if (config.invasives && rng() < c.invasiveRisk * .00075 && c.restoration < .55) c.veg = VEG.INVASIVE;
+          } else if (c.veg === VEG.SHRUB) {
+            if (rng() < (.0017 + config.suppressionFactor * .0014) * (1 - c.restoration * .6)) { c.veg = VEG.SAPLING; c.saplingAge = 0; }
+            spreadWoody(x, y, rng, nextChanges);
+          } else if (c.veg === VEG.SAPLING) {
+            c.saplingAge++;
+            if (c.saplingAge > 170 + Math.floor(rng() * 45)) c.veg = VEG.TREE;
+          } else if (c.veg === VEG.TREE) {
+            if (rng() < .0024) spreadWoody(x, y, rng, nextChanges);
+          } else if (c.veg === VEG.INVASIVE) {
+            spreadInvasive(x, y, rng, nextChanges);
+            if (c.restoration > .6 && rng() < .0025) c.veg = VEG.SPARSE;
+          } else if (c.veg === VEG.TURF) {
+            if (config.native > 65 && rng() < .0008 * restorationBoost) c.veg = VEG.SPARSE;
+            if (config.invasives && rng() < c.invasiveRisk * .00055) c.veg = VEG.INVASIVE;
+          } else if (c.veg === VEG.CROP) {
+            if (rng() < .001 + disturbance * .0005) c.veg = rng() < .4 ? VEG.BARE : VEG.CROP;
+          }
+        }
+      }
+
+      for (const change of nextChanges) {
+        const c = grid[change.y][change.x];
+        if (change.fire) c.onFire = Math.max(c.onFire, change.fire);
+        else if (change.veg !== undefined && c.onFire === 0) c.veg = change.veg;
+      }
+
+      updateAgents(rng);
+      if (tick % 10 === 0) {
+        connectivityCache = null;
+        stats = calculateStats(grid);
+        updateUI();
+      } else {
+        els.tickValue.textContent = String(tick);
+      }
+      dirty = true;
+    }
+
+    function spreadFire(x, y, c, rng, changes) {
+      const neighbors = [[1,0],[-1,0],[0,1],[0,-1]];
+      for (const [dx,dy] of neighbors) {
+        const nx = x + dx, ny = y + dy;
+        if (!inside(nx,ny)) continue;
+        const n = grid[ny][nx];
+        if (n.onFire > 0 || n.terrain === TERRAIN.WATER || n.terrain === TERRAIN.SPRING || n.land === LAND.ROAD || n.land === LAND.URBAN || n.land === LAND.STORMWATER) continue;
+        let fuel = n.veg === VEG.GRASS ? .62 : n.veg === VEG.SPARSE ? .09 : n.veg === VEG.SHRUB ? .29 : n.veg === VEG.SAPLING ? .19 : n.veg === VEG.TREE ? .055 : n.veg === VEG.INVASIVE ? .38 : .02;
+        if (n.terrain === TERRAIN.WETLAND) fuel *= .08;
+        if (n.terrain === TERRAIN.RIPARIAN) fuel *= .08;
+        if (n.terrain === TERRAIN.ROCK) fuel *= .13;
+        if (n.land === LAND.RESTORED && config.managedFire) fuel *= 1.08;
+        const suppression = config.suppression ? config.suppressionFactor : 0;
+        fuel *= 1 - suppression * .78;
+        if (stormPulse > 0) fuel *= .34;
+        if (rng() < fuel) changes.push({ x: nx, y: ny, fire: 4 });
+      }
+    }
+
+    function resolveFire(c, rng) {
+      if (c.veg === VEG.GRASS || c.veg === VEG.SPARSE || c.veg === VEG.TURF || c.veg === VEG.CROP || c.veg === VEG.INVASIVE) c.veg = VEG.BARE;
+      else if (c.veg === VEG.SHRUB) c.veg = rng() < .68 ? VEG.BARE : VEG.SHRUB;
+      else if (c.veg === VEG.SAPLING) c.veg = rng() < .77 ? VEG.BARE : VEG.SAPLING;
+      else if (c.veg === VEG.TREE) c.veg = rng() < (c.terrain === TERRAIN.RIPARIAN ? .08 : .24) ? VEG.BARE : VEG.TREE;
+      c.fireAge = 0;
+    }
+
+    function spreadWoody(x, y, rng, changes) {
+      if (rng() > .045) return;
+      const nx = x + Math.floor(rng() * 7) - 3, ny = y + Math.floor(rng() * 7) - 3;
+      if (!inside(nx,ny)) return;
+      const n = grid[ny][nx];
+      if ((n.veg === VEG.GRASS || n.veg === VEG.SPARSE || n.veg === VEG.BARE) && n.land !== LAND.ROAD && n.land !== LAND.URBAN && n.land !== LAND.AGRICULTURE && n.terrain !== TERRAIN.WATER && n.terrain !== TERRAIN.SPRING) {
+        const chance = .06 + config.suppressionFactor * .22 + (n.terrain === TERRAIN.RIPARIAN ? .22 : 0) - n.restoration * .13;
+        if (rng() < chance) changes.push({ x: nx, y: ny, veg: VEG.SHRUB });
+      }
+    }
+
+    function spreadInvasive(x, y, rng, changes) {
+      if (rng() > .16) return;
+      const nx = x + Math.floor(rng() * 5) - 2, ny = y + Math.floor(rng() * 5) - 2;
+      if (!inside(nx,ny)) return;
+      const n = grid[ny][nx];
+      if ([VEG.GRASS, VEG.SPARSE, VEG.BARE, VEG.TURF].includes(n.veg) && n.land !== LAND.ROAD && n.land !== LAND.URBAN && n.restoration < .7) {
+        if (rng() < n.invasiveRisk * .32) changes.push({ x: nx, y: ny, veg: VEG.INVASIVE });
+      }
+    }
+
+    function igniteRandom(rng, managed) {
+      for (let attempt = 0; attempt < 120; attempt++) {
+        const x = Math.floor(rng() * GRID), y = Math.floor(rng() * GRID), c = grid[y][x];
+        if (c.veg === VEG.GRASS && c.onFire === 0 && c.land !== LAND.URBAN && c.land !== LAND.ROAD && c.terrain !== TERRAIN.RIPARIAN) {
+          if (managed && (c.land === LAND.RESTORED || c.land === LAND.PARK || era === "historic")) c.onFire = 4;
+          else if (!managed) c.onFire = 4;
+          return;
+        }
+      }
+    }
+
+    function updateAgents(rng) {
+      if (!config.grazing || agents.length === 0) return;
+      for (let h = 0; h < herds.length; h++) {
+        const herd = herds[h];
+        herd.turn--;
+        if (herd.turn <= 0) {
+          const angle = (rng() - .5) * .8;
+          const ox = herd.vx, oy = herd.vy;
+          herd.vx = ox * Math.cos(angle) - oy * Math.sin(angle);
+          herd.vy = ox * Math.sin(angle) + oy * Math.cos(angle);
+          herd.turn = 30 + rng() * 80;
+        }
+        const margin = 10;
+        if (herd.x < margin) herd.vx += .02; if (herd.x > GRID - margin) herd.vx -= .02;
+        if (herd.y < margin) herd.vy += .02; if (herd.y > GRID - margin) herd.vy -= .02;
+        const mag = Math.hypot(herd.vx, herd.vy) || 1;
+        herd.vx = herd.vx / mag * .18; herd.vy = herd.vy / mag * .18;
+        herd.x = clamp(herd.x + herd.vx, 2, GRID - 3); herd.y = clamp(herd.y + herd.vy, 2, GRID - 3);
+      }
+
+      for (const a of agents) {
+        const herd = herds[a.herd];
+        let vx = a.vx + (herd.x - a.x) * .0045 + herd.vx * .035 + (rng() - .5) * .028;
+        let vy = a.vy + (herd.y - a.y) * .0045 + herd.vy * .035 + (rng() - .5) * .028;
+        const cx = clamp(Math.floor(a.x + vx * 3), 0, GRID - 1), cy = clamp(Math.floor(a.y + vy * 3), 0, GRID - 1);
+        const ahead = grid[cy][cx];
+        if (!agentCanEnter(ahead)) {
+          const angle = rng() < .5 ? Math.PI * .55 : -Math.PI * .55;
+          const ox = vx, oy = vy;
+          vx = ox * Math.cos(angle) - oy * Math.sin(angle);
+          vy = ox * Math.sin(angle) + oy * Math.cos(angle);
+        }
+        const mag = Math.hypot(vx,vy) || 1;
+        const max = config.grazingType === "bison" ? .44 : .29;
+        if (mag > max) { vx = vx / mag * max; vy = vy / mag * max; }
+        a.vx = vx; a.vy = vy;
+        const nx = clamp(a.x + vx, 1, GRID - 2), ny = clamp(a.y + vy, 1, GRID - 2);
+        if (agentCanEnter(grid[Math.floor(ny)][Math.floor(nx)])) { a.x = nx; a.y = ny; }
+        a.grazeCooldown--;
+        if (a.grazeCooldown <= 0) {
+          const cell = grid[Math.floor(a.y)][Math.floor(a.x)];
+          if (cell.veg === VEG.GRASS) cell.veg = VEG.SPARSE;
+          else if (cell.veg === VEG.SPARSE && rng() < .42) cell.veg = VEG.BARE;
+          if (config.grazingType === "bison" && rng() < .03) {
+            for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+              const xx = Math.floor(a.x)+dx, yy = Math.floor(a.y)+dy;
+              if (inside(xx,yy) && agentCanEnter(grid[yy][xx]) && rng() < .36) grid[yy][xx].veg = VEG.BARE;
+            }
+          }
+          if ((cell.veg === VEG.SHRUB || cell.veg === VEG.SAPLING) && rng() < .08) cell.veg = VEG.BARE;
+          a.grazeCooldown = 5 + Math.floor(rng() * 10);
+        }
+      }
+    }
+
+    function agentCanEnter(c) {
+      return c && c.terrain !== TERRAIN.WATER && c.terrain !== TERRAIN.SPRING && c.terrain !== TERRAIN.ROCK && c.land !== LAND.ROAD && c.land !== LAND.URBAN && c.land !== LAND.STORMWATER;
+    }
+
+    function habitatEligible(c) {
+      if (c.land === LAND.ROAD || c.land === LAND.URBAN || c.land === LAND.AGRICULTURE || c.land === LAND.TURF) return Boolean(c.crossing);
+      if (c.terrain === TERRAIN.WATER || c.terrain === TERRAIN.SPRING) return false;
+      return [VEG.GRASS, VEG.SPARSE, VEG.SHRUB, VEG.SAPLING, VEG.TREE].includes(c.veg) && c.veg !== VEG.INVASIVE;
+    }
+
+    function habitatPassable(c) {
+      if (c.crossing) return true;
+      if (c.bridge) return false;
+      if (c.land === LAND.ROAD || c.land === LAND.URBAN || c.land === LAND.AGRICULTURE || c.land === LAND.TURF) return false;
+      if (c.terrain === TERRAIN.WATER || c.terrain === TERRAIN.SPRING) return true;
+      return habitatEligible(c);
+    }
+
+    function calculateConnectivity(targetGrid) {
+      if (targetGrid === grid && connectivityCache) return connectivityCache;
+      const visited = new Uint8Array(GRID * GRID);
+      const component = new Int32Array(GRID * GRID);
+      let componentId = 0, largest = 0, nativeTotal = 0, largestId = 0;
+      for (let y = 0; y < GRID; y++) for (let x = 0; x < GRID; x++) if (habitatEligible(targetGrid[y][x])) nativeTotal++;
+      const queueX = new Int16Array(GRID * GRID), queueY = new Int16Array(GRID * GRID);
+      for (let y = 0; y < GRID; y++) for (let x = 0; x < GRID; x++) {
+        const startIdx = index(x,y);
+        if (visited[startIdx] || !habitatPassable(targetGrid[y][x])) continue;
+        componentId++;
+        let head = 0, tail = 0, nativeCount = 0;
+        queueX[tail] = x; queueY[tail] = y; tail++; visited[startIdx] = 1;
+        while (head < tail) {
+          const cx = queueX[head], cy = queueY[head]; head++;
+          component[index(cx,cy)] = componentId;
+          if (habitatEligible(targetGrid[cy][cx])) nativeCount++;
+          const neighbors = [[1,0],[-1,0],[0,1],[0,-1]];
+          for (const [dx,dy] of neighbors) {
+            const nx = cx+dx, ny = cy+dy;
+            if (!inside(nx,ny)) continue;
+            const idx = index(nx,ny);
+            if (!visited[idx] && habitatPassable(targetGrid[ny][nx])) { visited[idx] = 1; queueX[tail] = nx; queueY[tail] = ny; tail++; }
+          }
+        }
+        if (nativeCount > largest) { largest = nativeCount; largestId = componentId; }
+      }
+      const result = { score: nativeTotal ? Math.round(largest/nativeTotal*100) : 0, component, largestId, nativeTotal, largest };
+      if (targetGrid === grid) connectivityCache = result;
+      return result;
+    }
+
+    function calculateStats(targetGrid) {
+      let land = 0, prairie = 0, woody = 0, impervious = 0, invasive = 0, bare = 0, burning = 0;
+      let riparianTotal = 0, riparianIntact = 0, infiltrationSum = 0, floodSum = 0, pollinatorSum = 0, soilSum = 0, carbonSum = 0;
+      let waterEdge = 0, nativeDiversity = new Set();
+      for (let y = 0; y < GRID; y++) for (let x = 0; x < GRID; x++) {
+        const c = targetGrid[y][x];
+        if (c.terrain === TERRAIN.WATER || c.terrain === TERRAIN.SPRING) continue;
+        land++;
+        if (c.onFire > 0) burning++;
+        if (c.land === LAND.ROAD || c.land === LAND.URBAN) impervious++;
+        if (c.veg === VEG.INVASIVE) invasive++;
+        if (c.veg === VEG.BARE) bare++;
+        if ((c.veg === VEG.GRASS || c.veg === VEG.SPARSE) && [LAND.NATURAL, LAND.PARK, LAND.RESTORED].includes(c.land)) prairie++;
+        if ([VEG.SHRUB, VEG.SAPLING, VEG.TREE].includes(c.veg)) woody++;
+        if (c.terrain === TERRAIN.RIPARIAN || c.terrain === TERRAIN.WETLAND) {
+          riparianTotal++;
+          if (![LAND.ROAD, LAND.URBAN, LAND.AGRICULTURE, LAND.TURF].includes(c.land) && c.veg !== VEG.INVASIVE) riparianIntact++;
+        }
+        infiltrationSum += c.infiltration * 100;
+        const floodCell = c.terrain === TERRAIN.WETLAND ? 100 : c.terrain === TERRAIN.RIPARIAN ? 85 : c.land === LAND.STORMWATER ? 88 : c.infiltration * 72 - c.runoff * 20;
+        floodSum += clamp(floodCell, 0, 100);
+        const pollinatorCell = c.veg === VEG.GRASS && [LAND.NATURAL, LAND.RESTORED, LAND.PARK].includes(c.land) ? 92 : c.veg === VEG.SPARSE ? 64 : c.veg === VEG.SHRUB ? 56 : c.veg === VEG.TURF ? 18 : c.veg === VEG.CROP ? 22 : c.veg === VEG.INVASIVE ? 15 : 28;
+        pollinatorSum += clamp(pollinatorCell + c.restoration * 8 - c.edgePressure * 18, 0, 100);
+        const covered = c.veg !== VEG.BARE && c.land !== LAND.ROAD && c.land !== LAND.URBAN;
+        soilSum += clamp((covered ? 66 : 18) + c.infiltration * 25 + c.restoration * 15 - c.edgePressure * 12, 0, 100);
+        const carbonCell = c.veg === VEG.TREE ? 94 : c.veg === VEG.SAPLING ? 70 : c.veg === VEG.SHRUB ? 55 : c.veg === VEG.GRASS ? 58 : c.veg === VEG.SPARSE ? 35 : c.veg === VEG.CROP ? 24 : c.veg === VEG.TURF ? 26 : 8;
+        carbonSum += carbonCell;
+        if (habitatEligible(c)) nativeDiversity.add(`${c.terrain}-${c.veg}`);
+        if (c.terrain === TERRAIN.RIPARIAN || c.terrain === TERRAIN.WETLAND) waterEdge++;
+      }
+      const connectivity = calculateConnectivity(targetGrid).score;
+      const s = emptyStats();
+      s.prairie = pct(prairie,land); s.woody = pct(woody,land); s.impervious = pct(impervious,land); s.invasive = pct(invasive,land); s.bare = pct(bare,land); s.burning = pct(burning,land);
+      s.riparian = pct(riparianIntact,riparianTotal); s.connected = connectivity;
+      s.services.infiltration = Math.round(infiltrationSum/land);
+      s.services.flood = Math.round(floodSum/land);
+      s.services.pollinator = Math.round(pollinatorSum/land);
+      s.services.soil = Math.round(soilSum/land);
+      s.services.carbon = Math.round(carbonSum/land);
+      const diversityBonus = clamp(nativeDiversity.size * 2.2, 0, 20);
+      s.condition = clamp(Math.round(s.prairie * .22 + s.riparian * .17 + s.connected * .19 + s.services.infiltration * .13 + s.services.pollinator * .12 + diversityBonus - s.impervious * .28 - s.invasive * .35),0,100);
+      s.species.birds = clamp(Math.round(s.prairie * .78 + s.connected * .26 - s.impervious * .35 - s.invasive * .22),0,100);
+      s.species.bees = clamp(Math.round(s.services.pollinator * .72 + s.connected * .18 - s.impervious * .2),0,100);
+      s.species.amphibians = clamp(Math.round(s.riparian * .46 + s.services.flood * .31 + pct(waterEdge,land) * 1.2 - s.impervious * .18),0,100);
+      s.species.bats = clamp(Math.round(s.riparian * .28 + s.woody * .42 + s.connected * .18 + s.services.pollinator * .16),0,100);
+      s.species.reptiles = clamp(Math.round(s.connected * .38 + s.prairie * .34 + s.woody * .18 - s.impervious * .22),0,100);
+      return s;
+    }
+
+    function getInterpretation() {
+      if (era === "historic") {
+        if (!config.managedFire && !config.lightning && stats.woody > 30) return "Without recurring fire, shrubs and young trees are surviving beyond protected waterways and rocky motts. Woody encroachment is replacing open prairie.";
+        if (!config.grazing) return "Fire is still operating, but the moving patchwork created by large grazers is missing. Grass height and bare-ground patterns become more uniform.";
+        return "The baseline remains a shifting prairie–savanna mosaic: open grassland dominates while waterways, rocky uplands, and motts retain more woody vegetation.";
+      }
+      if (era === "settlement") return "Cropland, fences, livestock, roads, and reduced cultural burning fragment the disturbance system. Prairie remains extensive, but connectivity and fire movement are beginning to break down.";
+      if (era === "modern") {
+        if (stats.impervious > 20 && stats.connected < 50) return "Development leaves visible green areas, but roads and buildings divide them into smaller habitat islands. Runoff rises while fire and animal movement are restricted.";
+        return "The I-35-inspired corridor concentrates impervious cover and disturbance. Riparian remnants and parks still matter, but they do not automatically form one connected ecosystem.";
+      }
+      if (era === "restoration") return "The built footprint remains, yet connected riparian buffers, native landscaping, prairie restoration, prescribed fire, and green infrastructure recover meaningful ecological function.";
+      if (era === "custom") {
+        if (stats.condition > 70) return "Your scenario keeps substantial development while recovering strong ecological function through connected habitat, native vegetation, protected water corridors, and better stormwater management.";
+        if (stats.condition > 45) return "Your scenario produces a mixed result. Some services recover, but fragmentation, impervious cover, or invasive pressure still limit the landscape.";
+        return "Your scenario is dominated by fragmentation and disturbed land. Increase riparian protection, native landscaping, prairie restoration, or green infrastructure and compare again.";
+      }
+      return "Watch how land use and ecological drivers interact.";
+    }
+
+    function updateUI() {
+      els.tickValue.textContent = String(tick);
+      els.prairieStat.textContent = `${stats.prairie}%`;
+      els.woodyStat.textContent = `${stats.woody}%`;
+      els.imperviousStat.textContent = `${stats.impervious}%`;
+      els.invasiveStat.textContent = `${stats.invasive}%`;
+      els.riparianStat.textContent = `${stats.riparian}%`;
+      els.connectedStat.textContent = `${stats.connected}%`;
+      els.bareStat.textContent = `${stats.bare}%`;
+      els.burningStat.textContent = `${stats.burning}%`;
+      els.conditionStat.textContent = `${stats.condition} / 100`;
+      els.conditionBar.style.width = `${stats.condition}%`;
+      els.serviceInfiltration.textContent = stats.services.infiltration;
+      els.serviceFlood.textContent = stats.services.flood;
+      els.servicePollinator.textContent = stats.services.pollinator;
+      els.serviceSoil.textContent = stats.services.soil;
+      els.serviceCarbon.textContent = stats.services.carbon;
+      els.speciesBirds.textContent = stats.species.birds;
+      els.speciesBees.textContent = stats.species.bees;
+      els.speciesAmphibians.textContent = stats.species.amphibians;
+      els.speciesBats.textContent = stats.species.bats;
+      els.speciesReptiles.textContent = stats.species.reptiles;
+      els.interpretation.textContent = getInterpretation();
+      els.playButton.textContent = running ? "❚❚ Pause" : "▶ Play";
+      updateProcessKey();
+    }
+
+    function baseCellColor(c) {
+      if (c.terrain === TERRAIN.SPRING) return COLORS.spring;
+      if (c.terrain === TERRAIN.WATER) return c.stream === "San Marcos River" || c.stream.includes("Spring") ? COLORS.waterDeep : COLORS.water;
+      if (c.land === LAND.ROAD) return COLORS.road;
+      if (c.land === LAND.URBAN) return hashNoise(c.x,c.y,selectedSeed+33) < .18 ? COLORS.roof : COLORS.urban;
+      if (c.land === LAND.STORMWATER) return COLORS.stormwater;
+      if (c.veg === VEG.INVASIVE) return COLORS.invasive;
+      if (c.veg === VEG.TURF) return COLORS.turf;
+      if (c.veg === VEG.CROP) return COLORS.crop;
+      if (c.terrain === TERRAIN.ROCK && c.veg !== VEG.TREE && c.veg !== VEG.SHRUB) return COLORS.rock;
+      if (c.terrain === TERRAIN.WETLAND && c.veg !== VEG.SHRUB) return COLORS.wetland;
+      if (c.veg === VEG.BARE) return COLORS.prairieBare;
+      if (c.veg === VEG.SPARSE) return COLORS.prairieSparse;
+      if (c.veg === VEG.GRASS) return c.land === LAND.RESTORED ? COLORS.restored : c.land === LAND.PARK ? COLORS.park : COLORS.prairieGrass;
+      if (c.veg === VEG.SHRUB) return COLORS.shrub;
+      if (c.veg === VEG.SAPLING) return COLORS.sapling;
+      if (c.veg === VEG.TREE) return c.terrain === TERRAIN.RIPARIAN ? COLORS.riparianTree : COLORS.tree;
+      return COLORS.prairieBare;
+    }
+
+    function render(targetCtx = ctx, targetGrid = grid, scale = CELL, showLabels = true, drawAgents = true) {
+      const targetSize = targetCtx.canvas.width;
+      const cell = targetSize / GRID;
+      targetCtx.imageSmoothingEnabled = false;
+      targetCtx.fillStyle = "#d8c58d";
+      targetCtx.fillRect(0,0,targetSize,targetSize);
+      const connectivity = overlay === "connectivity" && targetGrid === grid ? calculateConnectivity(targetGrid) : null;
+
+      for (let y = 0; y < GRID; y++) for (let x = 0; x < GRID; x++) {
+        const c = targetGrid[y][x];
+        targetCtx.fillStyle = baseCellColor(c);
+        targetCtx.fillRect(x*cell, y*cell, Math.ceil(cell)+.2, Math.ceil(cell)+.2);
+
+        if (overlay !== "none" && targetGrid === grid) drawOverlayCell(targetCtx,c,x,y,cell,connectivity);
+        if (c.onFire > 0) {
+          targetCtx.fillStyle = c.onFire % 2 ? COLORS.fire : COLORS.ember;
+          targetCtx.fillRect(x*cell, y*cell, Math.ceil(cell)+.3, Math.ceil(cell)+.3);
+        }
+      }
+
+      drawInfrastructure(targetCtx,targetGrid,cell);
+      if (drawAgents && targetGrid === grid && config.grazing && agents.length) drawAgentsOnCanvas(targetCtx,cell);
+      if (showLabels) drawMapLabels(targetCtx,cell);
+      if (overlay === "water" && targetGrid === grid) drawWaterArrows(targetCtx,cell);
+      if (overlay === "seed" && targetGrid === grid) drawSeedArrows(targetCtx,cell);
+      if (overlay === "grazing" && targetGrid === grid) drawGrazingHalos(targetCtx,cell);
+    }
+
+    function drawOverlayCell(targetCtx,c,x,y,cell,connectivity) {
+      let alpha = 0, color = "0,0,0";
+      if (overlay === "water") { alpha = .08 + c.runoff * .46; color = c.runoff > c.infiltration ? "190,64,40" : "36,124,157"; }
+      else if (overlay === "fire") {
+        const fuel = c.veg === VEG.GRASS ? .95 : c.veg === VEG.INVASIVE ? .72 : c.veg === VEG.SHRUB ? .52 : c.veg === VEG.SAPLING ? .35 : c.veg === VEG.TREE ? .12 : .04;
+        alpha = fuel * (1 - (config.suppression ? config.suppressionFactor*.75 : 0)) * .55; color = "215,79,34";
+      }
+      else if (overlay === "fragmentation") { alpha = c.edgePressure * .64; color = "108,53,128"; }
+      else if (overlay === "invasive") { alpha = c.invasiveRisk * .62; color = "155,57,101"; }
+      else if (overlay === "restoration") { alpha = c.restoration * .62 + (c.protected ? .16 : 0); color = "24,132,84"; }
+      else if (overlay === "seed") { alpha = c.seedRisk * .36; color = "197,142,44"; }
+      else if (overlay === "connectivity" && connectivity && (habitatEligible(c) || c.crossing)) {
+        const id = connectivity.component[index(x,y)]; alpha = id === connectivity.largestId ? .38 : .44; color = id === connectivity.largestId ? "18,134,85" : "112,76,145";
+      }
+      if (alpha > .015) {
+        targetCtx.fillStyle = `rgba(${color},${clamp(alpha,0,.7)})`;
+        targetCtx.fillRect(x*cell,y*cell,Math.ceil(cell)+.2,Math.ceil(cell)+.2);
+      }
+    }
+
+    function drawInfrastructure(targetCtx,targetGrid,cell) {
+      if (era === "historic") return;
+      targetCtx.save();
+      if (era === "settlement") {
+        targetCtx.strokeStyle = COLORS.fence; targetCtx.lineWidth = Math.max(1,cell*.18); targetCtx.setLineDash([cell*1.2,cell*.8]);
+        const fences = [[[15,42],[62,42]],[[28,60],[68,60]],[[82,8],[82,52]],[[96,55],[96,112]]];
+        for (const f of fences) { targetCtx.beginPath(); targetCtx.moveTo(f[0][0]*cell,f[0][1]*cell); targetCtx.lineTo(f[1][0]*cell,f[1][1]*cell); targetCtx.stroke(); }
+        targetCtx.setLineDash([]);
+      } else {
+        targetCtx.strokeStyle = "rgba(255,255,255,.66)"; targetCtx.lineWidth = Math.max(1,cell*.22);
+        targetCtx.beginPath();
+        for (let y=0;y<GRID;y++) { const x=roadCenterX(y); if(y===0) targetCtx.moveTo(x*cell,y*cell); else targetCtx.lineTo(x*cell,y*cell); }
+        targetCtx.stroke();
+        targetCtx.strokeStyle = "rgba(20,20,20,.55)"; targetCtx.lineWidth = Math.max(1,cell*.08); targetCtx.setLineDash([cell*1.3,cell*1.1]); targetCtx.stroke(); targetCtx.setLineDash([]);
+        if (era === "restoration" || era === "custom") {
+          targetCtx.strokeStyle = "rgba(98,176,105,.95)";
+          targetCtx.lineWidth = Math.max(2, cell * .72);
+          for (const crossingY of [35,61,92]) {
+            const center = roadCenterX(crossingY);
+            const c = targetGrid[crossingY] && targetGrid[crossingY][Math.round(center)];
+            if (c && c.crossing) {
+              targetCtx.beginPath();
+              targetCtx.moveTo((center-5)*cell, crossingY*cell);
+              targetCtx.lineTo((center+5)*cell, crossingY*cell);
+              targetCtx.stroke();
+            }
+          }
+        }
+      }
+      targetCtx.restore();
+    }
+
+    function drawAgentsOnCanvas(targetCtx,cell) {
+      targetCtx.save();
+      for (const a of agents) {
+        targetCtx.fillStyle = config.grazingType === "bison" ? COLORS.agentBison : COLORS.agentCattle;
+        targetCtx.strokeStyle = config.grazingType === "bison" ? "rgba(255,255,255,.25)" : "rgba(55,43,31,.75)";
+        targetCtx.lineWidth = Math.max(.4,cell*.1);
+        targetCtx.beginPath(); targetCtx.arc(a.x*cell,a.y*cell,Math.max(1.2,cell*.32),0,Math.PI*2); targetCtx.fill(); targetCtx.stroke();
+      }
+      targetCtx.restore();
+    }
+
+    function drawMapLabels(targetCtx,cell) {
+      targetCtx.save();
+      targetCtx.font = `700 ${Math.max(8,cell*1.55)}px system-ui`;
+      targetCtx.textBaseline = "middle";
+      const labels = [
+        [6,18,"Blanco River"],[54,71,"Spring Lake"],[56,83,"San Marcos River"],[88,18,"Plum Creek"],
+        [11,109,"Edwards Plateau uplands"],[90,113,"Blackland Prairie"],
+      ];
+      if (era !== "historic") labels.push([72,8,"Kyle"],[72,69,"San Marcos"]);
+      if (["modern","restoration","custom"].includes(era)) labels.push([64,45,"I-35 corridor"]);
+      for (const [x,y,text] of labels) {
+        const width = targetCtx.measureText(text).width;
+        targetCtx.fillStyle = "rgba(255,253,247,.78)"; targetCtx.fillRect(x*cell-3,y*cell-cell,width+6,cell*2);
+        targetCtx.fillStyle = "rgba(27,48,37,.9)"; targetCtx.fillText(text,x*cell,y*cell);
+      }
+      targetCtx.restore();
+    }
+
+    function drawWaterArrows(targetCtx,cell) {
+      targetCtx.save();
+      targetCtx.strokeStyle = stormPulse > 0 ? "rgba(188,53,31,.72)" : "rgba(17,94,130,.55)";
+      targetCtx.fillStyle = targetCtx.strokeStyle;
+      targetCtx.lineWidth = Math.max(1,cell*.18);
+      for (let y=6;y<GRID;y+=12) for (let x=6;x<GRID;x+=12) {
+        const c=grid[y][x]; if(c.land===LAND.ROAD||c.land===LAND.URBAN||c.runoff>.55) {
+          let tx=x,ty=y;
+          const candidates=[[x+6,y],[x-6,y],[x,y+6],[x,y-6]].filter(([xx,yy])=>inside(xx,yy));
+          candidates.sort((a,b)=>grid[a[1]][a[0]].elevation-grid[b[1]][b[0]].elevation);
+          if(candidates.length){tx=candidates[0][0];ty=candidates[0][1];}
+          drawArrow(targetCtx,x*cell,y*cell,tx*cell,ty*cell,cell*.8);
+        }
+      }
+      targetCtx.restore();
+    }
+
+    function drawSeedArrows(targetCtx,cell) {
+      targetCtx.save(); targetCtx.strokeStyle="rgba(190,128,31,.62)"; targetCtx.fillStyle=targetCtx.strokeStyle; targetCtx.lineWidth=Math.max(1,cell*.14);
+      for(let y=8;y<GRID;y+=14) for(let x=8;x<GRID;x+=14){const c=grid[y][x]; if([VEG.TREE,VEG.SHRUB,VEG.INVASIVE].includes(c.veg)){const angle=hashNoise(x,y,selectedSeed+tick)*Math.PI*2;drawArrow(targetCtx,x*cell,y*cell,(x+Math.cos(angle)*5)*cell,(y+Math.sin(angle)*5)*cell,cell*.7);}}
+      targetCtx.restore();
+    }
+
+    function drawGrazingHalos(targetCtx,cell) {
+      targetCtx.save();
+      for(const herd of herds){const g=targetCtx.createRadialGradient(herd.x*cell,herd.y*cell,0,herd.x*cell,herd.y*cell,9*cell);g.addColorStop(0,"rgba(130,78,25,.34)");g.addColorStop(1,"rgba(130,78,25,0)");targetCtx.fillStyle=g;targetCtx.beginPath();targetCtx.arc(herd.x*cell,herd.y*cell,9*cell,0,Math.PI*2);targetCtx.fill();}
+      targetCtx.restore();
+    }
+
+    function drawArrow(targetCtx,x1,y1,x2,y2,head) {
+      const angle=Math.atan2(y2-y1,x2-x1); targetCtx.beginPath(); targetCtx.moveTo(x1,y1); targetCtx.lineTo(x2,y2); targetCtx.stroke();
+      targetCtx.beginPath(); targetCtx.moveTo(x2,y2); targetCtx.lineTo(x2-head*Math.cos(angle-.45),y2-head*Math.sin(angle-.45)); targetCtx.lineTo(x2-head*Math.cos(angle+.45),y2-head*Math.sin(angle+.45)); targetCtx.closePath(); targetCtx.fill();
+    }
+
+    function updateProcessKey() {
+      const keys = {
+        none: "", water: "Blue = infiltration and flow · orange/red = concentrated runoff. Add a rainstorm to intensify the pattern.",
+        fire: "Brighter orange = continuous fuels more likely to carry fire. Water, pavement, wetland, and suppression reduce spread.",
+        grazing: "Brown halos show current grazing concentration around moving herds.", seed: "Gold shading and arrows show likely seed movement from woody and invasive source areas.",
+        connectivity: "Green = largest connected native network · purple = isolated habitat fragments.", fragmentation: "Purple intensity increases near roads, buildings, and hard habitat edges.",
+        invasive: "Magenta intensity shows establishment risk along disturbed edges, roads, and waterways.", restoration: "Green intensity identifies protected, restored, and green-infrastructure cells."
+      };
+      els.processKey.hidden = overlay === "none";
+      els.processKey.textContent = keys[overlay] || "";
+    }
+
+    function animationLoop(now) {
+      const delta = Math.min(250, now - previousTime); previousTime = now;
+      if (running && !document.hidden) {
+        accumulated += delta * speed;
+        let steps = 0;
+        while (accumulated >= TICK_MS && steps < MAX_STEPS_PER_FRAME) { ecologicalStep(); accumulated -= TICK_MS; steps++; }
+      }
+      if (dirty || (overlay !== "none" && now - lastDraw > 90) || (config.grazing && running && now-lastDraw>45)) {
+        render(); dirty = false; lastDraw = now;
+      }
+      requestAnimationFrame(animationLoop);
+    }
+
+    function triggerStorm() {
+      stormPulse = 65;
+      for (let y=0;y<GRID;y++) for(let x=0;x<GRID;x++) {
+        const c=grid[y][x];
+        if (c.terrain!==TERRAIN.WATER&&c.terrain!==TERRAIN.SPRING) c.moisture=clamp(c.moisture+.18*(1-c.runoff),0,1);
+      }
+      showToast("Rainstorm added. Select Water flow & runoff to see the response."); dirty=true;
+    }
+
+    function igniteAtCanvas(event) {
+      if (!igniteMode) return;
+      const rect=canvas.getBoundingClientRect(); const x=Math.floor((event.clientX-rect.left)/rect.width*GRID); const y=Math.floor((event.clientY-rect.top)/rect.height*GRID);
+      if(!inside(x,y))return; const c=grid[y][x];
+      if([VEG.GRASS,VEG.SPARSE,VEG.SHRUB,VEG.SAPLING,VEG.INVASIVE].includes(c.veg)&&c.land!==LAND.ROAD&&c.land!==LAND.URBAN&&c.terrain!==TERRAIN.WATER&&c.terrain!==TERRAIN.SPRING){c.onFire=4;showToast("Fire ignited on a burnable cell.");dirty=true;}else showToast("Choose a grass, shrub, sapling, or invasive patch away from pavement and water.");
+    }
+
+    function showWhy() {
+      const drivers=[];
+      if(config.suppression)drivers.push(["Fire suppression","More shrubs and tree seedlings survive long enough to mature, especially on fragmented land where fire cannot move freely."]);
+      if(config.grazing)drivers.push([config.grazingType==="bison"?"Migratory grazing":"Livestock grazing","Grazers shorten grass, create bare patches, redistribute disturbance, and sometimes trample young woody plants."]);
+      if(config.managedFire)drivers.push([era==="historic"?"Indigenous fire stewardship":"Prescribed fire","Planned burning reconnects a process that limits woody encroachment and renews prairie vegetation when conditions and management are appropriate."]);
+      if(config.invasives)drivers.push(["Disturbance-linked invasive plants","Road edges, altered waterways, soil disturbance, and fragmented habitats increase opportunities for invasive establishment and spread."]);
+      if(stats.impervious>3)drivers.push(["Urbanization and roads","Impervious surfaces remove habitat, concentrate runoff, create heat and edge effects, and divide the remaining native network."]);
+      if(config.restoration>20)drivers.push(["Restoration and green infrastructure","Native plantings, protected riparian buffers, connected corridors, and stormwater features recover function without removing the entire built footprint."]);
+      if(!config.lightning&&!config.managedFire)drivers.push(["Fire removed","When both lightning and managed fire are absent, woody plants escape a major source of mortality and expand into former prairie."]);
+      els.whyLead.textContent=getInterpretation();
+      els.whyCards.innerHTML=drivers.slice(0,6).map(([title,text])=>`<article class="info-card"><h3>${title}</h3><p>${text}</p></article>`).join("");
+      els.whyDialog.showModal();
+    }
+
+    function renderCompare() {
+      const historicConfig=cloneConfig(ERA_CONFIG.historic); const rng=mulberry32(selectedSeed+1); const historicGrid=copyBaseGrid(); applyScenario(historicGrid,historicConfig,"historic",rng);
+      const historicStats=calculateStats(historicGrid); const hctx=els.historicCompareCanvas.getContext("2d",{alpha:false});
+      const oldOverlay=overlay, oldEra=era; overlay="none"; render(hctx,historicGrid,4,false,false); overlay=oldOverlay;
+      const cctx=els.currentCompareCanvas.getContext("2d",{alpha:false}); render(cctx,grid,4,false,false);
+      els.currentCompareHeading.textContent=config.title; els.currentCompareColumn.textContent=config.short;
+      const rows=[
+        ["Native prairie",`${historicStats.prairie}%`,`${stats.prairie}%`],["Woody cover",`${historicStats.woody}%`,`${stats.woody}%`],["Impervious surface",`${historicStats.impervious}%`,`${stats.impervious}%`],
+        ["Invasive cover",`${historicStats.invasive}%`,`${stats.invasive}%`],["Riparian habitat intact",`${historicStats.riparian}%`,`${stats.riparian}%`],["Connected habitat",`${historicStats.connected}%`,`${stats.connected}%`],
+        ["Water infiltration",historicStats.services.infiltration,stats.services.infiltration],["Flood resilience",historicStats.services.flood,stats.services.flood],["Ecological condition",historicStats.condition,stats.condition]
+      ];
+      els.compareTableBody.innerHTML=rows.map(r=>`<tr><td>${r[0]}</td><td>${r[1]}</td><td>${r[2]}</td></tr>`).join("");
+      els.compareDialog.showModal();
+    }
+
+    function downloadSnapshot() {
+      const link=document.createElement("a"); link.download=`central-texas-landscape-${era}-tick-${tick}.png`; link.href=canvas.toDataURL("image/png"); link.click(); showToast("Landscape image downloaded.");
+    }
+
+    function showToast(message) {
+      clearTimeout(toastTimer); els.toast.textContent=message; els.toast.classList.add("show"); toastTimer=setTimeout(()=>els.toast.classList.remove("show"),2600);
+    }
+
+    const onboardingContent=[
+      ["Choose a time period","Use the tabs above to compare the ecological baseline, settlement, modern development, and a restoration-focused future."],
+      ["Press play and change the drivers","Pause, reset, add a rainstorm, ignite a burnable patch, or turn ecological drivers on and off."],
+      ["Reveal the invisible processes","Choose an overlay for runoff, fire, grazing, seed movement, connectivity, fragmentation, invasive risk, or restoration influence."]
+    ];
+    function showOnboardingStep() {
+      const [title,text]=onboardingContent[onboardingIndex]; els.onboardingStep.textContent=`Step ${onboardingIndex+1} of ${onboardingContent.length}`; els.onboardingTitle.textContent=title; els.onboardingText.textContent=text; els.onboardingNext.textContent=onboardingIndex===onboardingContent.length-1?"Start exploring":"Next";
+    }
+    function closeOnboarding(){els.onboarding.hidden=true;try{localStorage.setItem("ctle-onboarding-seen","1");}catch(e){}}
+
+    function bindEvents() {
+      document.querySelectorAll(".era-button").forEach(btn=>btn.addEventListener("click",()=>setEra(btn.dataset.era)));
+      els.timeline.addEventListener("input",()=>setEra(ERA_ORDER[Number(els.timeline.value)]));
+      els.playButton.addEventListener("click",()=>{running=!running;updateUI();});
+      els.resetButton.addEventListener("click",()=>resetScenario());
+      els.stormButton.addEventListener("click",triggerStorm);
+      els.igniteButton.addEventListener("click",()=>{igniteMode=!igniteMode;els.igniteButton.setAttribute("aria-pressed",String(igniteMode));els.canvasFrame.classList.toggle("is-ignite",igniteMode);showToast(igniteMode?"Click a burnable patch on the map.":"Ignition mode turned off.");});
+      canvas.addEventListener("click",igniteAtCanvas);
+      els.whyButton.addEventListener("click",showWhy);
+      els.compareButton.addEventListener("click",renderCompare);
+      els.snapshotButton.addEventListener("click",downloadSnapshot);
+      els.speedSelect.addEventListener("change",()=>speed=Number(els.speedSelect.value));
+      els.overlaySelect.addEventListener("change",()=>{overlay=els.overlaySelect.value;updateProcessKey();dirty=true;});
+
+      const toggles=[els.grazingToggle,els.lightningToggle,els.managedFireToggle,els.suppressionToggle,els.invasiveToggle];
+      toggles.forEach(el=>el.addEventListener("change",()=>{
+        config.grazing=els.grazingToggle.checked; config.lightning=els.lightningToggle.checked; config.managedFire=els.managedFireToggle.checked; config.suppression=els.suppressionToggle.checked; config.invasives=els.invasiveToggle.checked;
+        if(config.grazing&&config.grazingType==="none"){config.grazingType=era==="historic"?"bison":"cattle";config.agentCount=era==="historic"?88:45;} if(!config.grazing){config.agentCount=0;agents=[];herds=[];} else if(!agents.length){initializeAgents(mulberry32(selectedSeed+tick+13));}
+        config.suppressionFactor=config.suppression?ERA_CONFIG[era].suppressionFactor:0; updateDriverCount(); calculatePressures(grid,config); connectivityCache=null;stats=calculateStats(grid);updateUI();dirty=true;
+      }));
+
+      const ranges=[els.urbanRange,els.roadRange,els.riparianRange,els.nativeRange,els.restorationRange,els.greenRange,els.crossingRange];
+      let rangeTimer=null;
+      ranges.forEach(el=>el.addEventListener("input",()=>{
+        updateRangeLabels(); clearTimeout(rangeTimer); rangeTimer=setTimeout(()=>{
+          config.urban=Number(els.urbanRange.value);config.roads=Number(els.roadRange.value);config.riparian=Number(els.riparianRange.value);config.native=Number(els.nativeRange.value);config.restoration=Number(els.restorationRange.value);config.green=Number(els.greenRange.value);config.connectivity=Number(els.crossingRange.value);resetScenario(false);
+        },120);
+      }));
+
+      els.onboardingNext.addEventListener("click",()=>{if(onboardingIndex<onboardingContent.length-1){onboardingIndex++;showOnboardingStep();}else closeOnboarding();});
+      els.onboardingSkip.addEventListener("click",closeOnboarding);
+      document.querySelectorAll("[data-close-dialog]").forEach(btn=>btn.addEventListener("click",()=>document.getElementById(btn.dataset.closeDialog).close()));
+      [els.whyDialog,els.compareDialog].forEach(dialog=>dialog.addEventListener("click",event=>{if(event.target===dialog)dialog.close();}));
+      document.addEventListener("visibilitychange",()=>{previousTime=performance.now();});
+      window.addEventListener("keydown",event=>{
+        if(event.code==="Space"&&!["INPUT","SELECT","BUTTON"].includes(document.activeElement.tagName)){event.preventDefault();running=!running;updateUI();}
+        if(event.key==="Escape"&&igniteMode){igniteMode=false;els.igniteButton.setAttribute("aria-pressed","false");els.canvasFrame.classList.remove("is-ignite");}
+      });
+    }
+
+    function init() {
+      baseGrid=generateBaseGrid(BASE_SEED);
+      bindEvents();
+      applyEraDefaultsToControls();
+      setEra("historic",false);
+      showOnboardingStep();
+      try { if(localStorage.getItem("ctle-onboarding-seen")==="1") els.onboarding.hidden=true; } catch(e) {}
+      requestAnimationFrame(animationLoop);
+    }
+
+    init();
+  })();
   </script>
 </body>
 </html>
